@@ -1,10 +1,14 @@
 use regex::Regex;
+use std::sync::LazyLock;
+
+/// Pre-compiled ANSI escape code regex (avoids recompilation per call).
+static ANSI_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][AB012]").unwrap()
+});
 
 /// Strip ANSI escape codes from text.
 pub fn strip_ansi(input: &str) -> String {
-    // Matches CSI sequences, OSC sequences, and other common escape codes
-    let re = Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][AB012]").unwrap();
-    re.replace_all(input, "").into_owned()
+    ANSI_RE.replace_all(input, "").into_owned()
 }
 
 /// Collapse consecutive blank lines to a single blank line.

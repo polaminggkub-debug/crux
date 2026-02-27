@@ -55,8 +55,52 @@ fn should_intercept(command: &str) -> bool {
     }
 
     let known_prefixes = [
-        "git ", "cargo ", "npm ", "npx ", "pnpm ", "yarn ", "docker ", "go ", "kubectl ",
-        "gradle ", "gh ",
+        // Version control
+        "git ",
+        "gh ",
+        // Rust
+        "cargo ",
+        "rustc ",
+        // JavaScript / Node
+        "npm ",
+        "npx ",
+        "pnpm ",
+        "yarn ",
+        "next ",
+        "tsc ",
+        "eslint ",
+        "prettier ",
+        "vitest ",
+        "jest ",
+        // Python
+        "pytest ",
+        "pip ",
+        "ruff ",
+        // Go
+        "go ",
+        "golangci-lint ",
+        // Java / JVM
+        "gradle ",
+        "mvn ",
+        // Containers & orchestration
+        "docker ",
+        "kubectl ",
+        "helm ",
+        // Infrastructure & ops
+        "terraform ",
+        "ansible ",
+        "ssh ",
+        // Build systems
+        "make ",
+        // Filesystem & utilities
+        "ls ",
+        "find ",
+        "grep ",
+        "tree ",
+        "cat ",
+        "curl ",
+        "wget ",
+        "wc ",
     ];
     known_prefixes.iter().any(|p| command.starts_with(p))
 }
@@ -152,6 +196,222 @@ mod tests {
         let output = handle_hook(&input).unwrap();
         assert_eq!(output.result, "approve");
     }
+
+    // -- Test runners --
+
+    #[test]
+    fn pytest_command_intercepted() {
+        let input = make_input("Bash", "pytest --verbose");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+        let new_cmd = output.tool_input.unwrap()["command"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(new_cmd, "crux run pytest --verbose");
+    }
+
+    #[test]
+    fn vitest_command_intercepted() {
+        let input = make_input("Bash", "vitest run");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    #[test]
+    fn jest_command_intercepted() {
+        let input = make_input("Bash", "jest --coverage");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    // -- JS build tools --
+
+    #[test]
+    fn tsc_command_intercepted() {
+        let input = make_input("Bash", "tsc --noEmit");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    #[test]
+    fn eslint_command_intercepted() {
+        let input = make_input("Bash", "eslint src/");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    #[test]
+    fn prettier_command_intercepted() {
+        let input = make_input("Bash", "prettier --check .");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    #[test]
+    fn next_command_intercepted() {
+        let input = make_input("Bash", "next build");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+        let new_cmd = output.tool_input.unwrap()["command"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(new_cmd, "crux run next build");
+    }
+
+    // -- Python tools --
+
+    #[test]
+    fn pip_command_intercepted() {
+        let input = make_input("Bash", "pip install requests");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    #[test]
+    fn ruff_command_intercepted() {
+        let input = make_input("Bash", "ruff check src/");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+        let new_cmd = output.tool_input.unwrap()["command"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(new_cmd, "crux run ruff check src/");
+    }
+
+    // -- Go tools --
+
+    #[test]
+    fn golangci_lint_command_intercepted() {
+        let input = make_input("Bash", "golangci-lint run");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    // -- Infrastructure & ops --
+
+    #[test]
+    fn terraform_command_intercepted() {
+        let input = make_input("Bash", "terraform plan");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+        let new_cmd = output.tool_input.unwrap()["command"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(new_cmd, "crux run terraform plan");
+    }
+
+    #[test]
+    fn helm_command_intercepted() {
+        let input = make_input("Bash", "helm install my-release chart/");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    #[test]
+    fn ansible_command_intercepted() {
+        let input = make_input("Bash", "ansible playbook.yml");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    #[test]
+    fn ssh_command_intercepted() {
+        let input = make_input("Bash", "ssh user@host ls");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    // -- Build systems --
+
+    #[test]
+    fn make_command_intercepted() {
+        let input = make_input("Bash", "make build");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+        let new_cmd = output.tool_input.unwrap()["command"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(new_cmd, "crux run make build");
+    }
+
+    #[test]
+    fn mvn_command_intercepted() {
+        let input = make_input("Bash", "mvn clean install");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    #[test]
+    fn rustc_command_intercepted() {
+        let input = make_input("Bash", "rustc --edition 2021 main.rs");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    // -- Filesystem & utilities --
+
+    #[test]
+    fn ls_command_intercepted() {
+        let input = make_input("Bash", "ls -la");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    #[test]
+    fn find_command_intercepted() {
+        let input = make_input("Bash", "find . -name '*.rs'");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    #[test]
+    fn grep_command_intercepted() {
+        let input = make_input("Bash", "grep -r TODO src/");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    #[test]
+    fn tree_command_intercepted() {
+        let input = make_input("Bash", "tree -L 2");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    #[test]
+    fn cat_command_intercepted() {
+        let input = make_input("Bash", "cat README.md");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    #[test]
+    fn curl_command_intercepted() {
+        let input = make_input("Bash", "curl -s https://api.example.com");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    #[test]
+    fn wget_command_intercepted() {
+        let input = make_input("Bash", "wget https://example.com/file.tar.gz");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    #[test]
+    fn wc_command_intercepted() {
+        let input = make_input("Bash", "wc -l src/*.rs");
+        let output = handle_hook(&input).unwrap();
+        assert_eq!(output.result, "modify");
+    }
+
+    // -- Serialization --
 
     #[test]
     fn serialization_skip_none() {

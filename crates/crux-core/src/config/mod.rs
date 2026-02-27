@@ -3,5 +3,5 @@ pub mod cache;
 pub mod resolve;
 pub mod types;
 
-pub use resolve::resolve_filter;
+pub use resolve::{count_filters, resolve_filter, FilterCounts, BUILTIN_FALLBACK_PRIORITY};
 pub use types::FilterConfig;

@@ -17,6 +17,9 @@ enum Commands {
     Run {
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
+        /// Print execution timing breakdown to stderr
+        #[arg(long)]
+        time: bool,
     },
     /// Show token savings summary
     Gain {
@@ -54,7 +57,11 @@ enum Commands {
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
     },
-    /// Extract test summary from command output
+    /// Extract test summary from command output.
+    ///
+    /// Auto-detects: cargo test, pytest, jest, vitest, go test, mocha,
+    /// playwright, rspec, PHPUnit, dotnet test. Falls back to extracting
+    /// lines containing pass/fail/error/warning keywords.
     Test {
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
@@ -64,13 +71,15 @@ enum Commands {
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
     },
+    /// Run diagnostic checks on your crux installation
+    Doctor,
 }
 
 fn main() {
     let cli = Cli::parse();
 
     let result = match cli.command {
-        Commands::Run { command } => cmd_run(&command),
+        Commands::Run { command, time } => cmd_run(&command, time),
         Commands::Gain { by_command } => cmd_gain(by_command),
         #[cfg(feature = "tracking")]
         Commands::History { limit } => cmd_history(limit),
@@ -83,6 +92,7 @@ fn main() {
         Commands::Err { command } => commands::cmd_err(&command),
         Commands::Test { command } => commands::cmd_test(&command),
         Commands::Log { command } => commands::cmd_log(&command),
+        Commands::Doctor => commands::cmd_doctor(),
     };
 
     if let Err(e) = result {
@@ -95,18 +105,25 @@ fn main() {
 // Run
 // ---------------------------------------------------------------------------
 
-fn cmd_run(command: &[String]) -> Result<()> {
-    let start = Instant::now();
+fn cmd_run(command: &[String], show_time: bool) -> Result<()> {
+    let wall_start = Instant::now();
+
     let filter = crux_core::config::resolve_filter(command);
+
+    let exec_start = Instant::now();
     let result = crux_core::runner::run_command(command)?;
+    let exec_elapsed = exec_start.elapsed();
+
     let raw_output = &result.combined;
     let input_bytes = raw_output.len();
 
+    let filter_start = Instant::now();
     let filtered = if let Some(ref config) = filter {
         crux_core::filter::apply_filter(config, raw_output, result.exit_code)
     } else {
         raw_output.clone()
     };
+    let filter_elapsed = filter_start.elapsed();
     let output_bytes = filtered.len();
 
     print!("{filtered}");
@@ -120,7 +137,7 @@ fn cmd_run(command: &[String]) -> Result<()> {
 
     #[cfg(feature = "tracking")]
     {
-        let duration_ms = start.elapsed().as_millis() as u64;
+        let duration_ms = wall_start.elapsed().as_millis() as u64;
         if let Err(e) = record_tracking_and_history(
             command,
             &filter,
@@ -136,11 +153,30 @@ fn cmd_run(command: &[String]) -> Result<()> {
     }
 
     #[cfg(not(feature = "tracking"))]
-    let _ = start;
+    let _ = wall_start;
 
     if input_bytes > 0 && input_bytes != output_bytes {
         let saved_pct = ((input_bytes - output_bytes) as f64 / input_bytes as f64) * 100.0;
         eprintln!("crux: {input_bytes} → {output_bytes} bytes ({saved_pct:.0}% saved)");
+    }
+
+    if show_time {
+        let wall_elapsed = wall_start.elapsed();
+        eprintln!("crux: timing breakdown:");
+        eprintln!(
+            "  command execution: {:.3}ms",
+            exec_elapsed.as_secs_f64() * 1000.0
+        );
+        eprintln!(
+            "  filter pipeline:  {:.3}ms",
+            filter_elapsed.as_secs_f64() * 1000.0
+        );
+        eprintln!(
+            "  total wall time:  {:.3}ms",
+            wall_elapsed.as_secs_f64() * 1000.0
+        );
+        eprintln!("  input size:       {} bytes", input_bytes);
+        eprintln!("  output size:      {} bytes", output_bytes);
     }
 
     Ok(())

@@ -1,8 +1,17 @@
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 
 use super::types::FilterConfig;
+
+/// Priority assigned to builtin filter stubs when no TOML config exists.
+///
+/// This is the lowest priority so that any user or stdlib TOML filter always
+/// wins over the auto-generated builtin stub. The value -100 was chosen to
+/// leave plenty of room for negative-priority TOML overrides while ensuring
+/// builtins never accidentally shadow user config.
+pub const BUILTIN_FALLBACK_PRIORITY: i32 = -100;
 
 /// Directories searched for filter configs, in priority order:
 /// 1. `.crux/filters/` — local project overrides
@@ -34,8 +43,8 @@ pub fn resolve_filter(command: &[String]) -> Option<FilterConfig> {
         }
     }
 
-    // 3. Embedded stdlib
-    candidates.extend(load_embedded_stdlib());
+    // 3. Embedded stdlib (cached after first parse)
+    candidates.extend_from_slice(cached_embedded_stdlib());
 
     // 4. Builtin registry stubs (lowest priority fallback)
     // Ensures builtin handlers fire even when no TOML filters exist.
@@ -43,7 +52,7 @@ pub fn resolve_filter(command: &[String]) -> Option<FilterConfig> {
         if !candidates.iter().any(|c| c.command == *key) {
             candidates.push(FilterConfig {
                 command: key.to_string(),
-                priority: -100,
+                priority: BUILTIN_FALLBACK_PRIORITY,
                 ..Default::default()
             });
         }
@@ -148,6 +157,16 @@ fn parse_toml_file(path: &Path) -> Result<FilterConfig> {
     Ok(config)
 }
 
+/// Return a cached reference to parsed embedded stdlib filters.
+///
+/// The embedded TOML files are parsed once on first access and then reused
+/// for every subsequent `resolve_filter` call, avoiding repeated
+/// deserialization overhead on the hot path.
+fn cached_embedded_stdlib() -> &'static [FilterConfig] {
+    static CACHE: OnceLock<Vec<FilterConfig>> = OnceLock::new();
+    CACHE.get_or_init(load_embedded_stdlib)
+}
+
 /// Load embedded stdlib filters compiled into the binary via `include_dir`.
 fn load_embedded_stdlib() -> Vec<FilterConfig> {
     use include_dir::{include_dir, Dir};
@@ -184,6 +203,43 @@ fn parse_embedded_dir(dir: &include_dir::Dir<'_>) -> Vec<FilterConfig> {
     }
 
     configs
+}
+
+/// Counts of filters broken down by source category.
+#[derive(Debug, Default)]
+pub struct FilterCounts {
+    pub builtin: usize,
+    pub stdlib_toml: usize,
+    pub user_local: usize,
+    pub user_global: usize,
+}
+
+impl FilterCounts {
+    pub fn total(&self) -> usize {
+        self.builtin + self.stdlib_toml + self.user_local + self.user_global
+    }
+}
+
+/// Count all available filters by source category.
+pub fn count_filters() -> FilterCounts {
+    let builtin = crate::filter::builtin::registry().len();
+    let stdlib_toml = cached_embedded_stdlib().len();
+
+    let user_local = load_configs_from_dir(Path::new(".crux/filters"))
+        .map(|c| c.len())
+        .unwrap_or(0);
+
+    let user_global = home_dir()
+        .and_then(|h| load_configs_from_dir(&h.join(".config/crux/filters")).ok())
+        .map(|c| c.len())
+        .unwrap_or(0);
+
+    FilterCounts {
+        builtin,
+        stdlib_toml,
+        user_local,
+        user_global,
+    }
 }
 
 /// Platform-aware home directory lookup.
