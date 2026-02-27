@@ -57,13 +57,15 @@ pub fn filter_git_diff(output: &str, _exit_code: i32) -> String {
     for line in output.lines() {
         // File header lines
         if line.starts_with("diff --git") {
-            flush_hunk(&mut lines, &mut in_hunk, &mut hunk_adds, &mut hunk_dels, &hunk_file);
+            flush_hunk(
+                &mut lines,
+                &mut in_hunk,
+                &mut hunk_adds,
+                &mut hunk_dels,
+                &hunk_file,
+            );
             lines.push(line.to_string());
-            hunk_file = line
-                .split(" b/")
-                .nth(1)
-                .unwrap_or("unknown")
-                .to_string();
+            hunk_file = line.split(" b/").nth(1).unwrap_or("unknown").to_string();
             continue;
         }
 
@@ -78,14 +80,26 @@ pub fn filter_git_diff(output: &str, _exit_code: i32) -> String {
             || line.contains("insertions(+)")
             || line.contains("deletions(-)")
         {
-            flush_hunk(&mut lines, &mut in_hunk, &mut hunk_adds, &mut hunk_dels, &hunk_file);
+            flush_hunk(
+                &mut lines,
+                &mut in_hunk,
+                &mut hunk_adds,
+                &mut hunk_dels,
+                &hunk_file,
+            );
             lines.push(line.to_string());
             continue;
         }
 
         // Hunk header
         if line.starts_with("@@") {
-            flush_hunk(&mut lines, &mut in_hunk, &mut hunk_adds, &mut hunk_dels, &hunk_file);
+            flush_hunk(
+                &mut lines,
+                &mut in_hunk,
+                &mut hunk_adds,
+                &mut hunk_dels,
+                &hunk_file,
+            );
             lines.push(line.to_string());
             in_hunk = true;
             continue;
@@ -104,7 +118,13 @@ pub fn filter_git_diff(output: &str, _exit_code: i32) -> String {
         // index line, mode changes — skip for brevity
     }
 
-    flush_hunk(&mut lines, &mut in_hunk, &mut hunk_adds, &mut hunk_dels, &hunk_file);
+    flush_hunk(
+        &mut lines,
+        &mut in_hunk,
+        &mut hunk_adds,
+        &mut hunk_dels,
+        &hunk_file,
+    );
 
     if lines.is_empty() {
         "No changes.".to_string()
@@ -142,7 +162,11 @@ pub fn filter_git_log(output: &str, _exit_code: i32) -> String {
         if let Some(caps) = commit_re.captures(line) {
             // Flush previous commit
             if !current_hash.is_empty() {
-                result.push(format_commit(&current_hash, &current_author, &current_message));
+                result.push(format_commit(
+                    &current_hash,
+                    &current_author,
+                    &current_message,
+                ));
             }
             current_hash = caps[1][..7.min(caps[1].len())].to_string();
             current_author.clear();
@@ -175,7 +199,11 @@ pub fn filter_git_log(output: &str, _exit_code: i32) -> String {
 
     // Flush last commit
     if !current_hash.is_empty() {
-        result.push(format_commit(&current_hash, &current_author, &current_message));
+        result.push(format_commit(
+            &current_hash,
+            &current_author,
+            &current_message,
+        ));
     }
 
     // If input was already one-line format, pass through

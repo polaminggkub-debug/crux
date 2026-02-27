@@ -86,7 +86,10 @@ mod tests {
         let input = make_input("Bash", "git status");
         let output = handle_hook(&input).unwrap();
         assert_eq!(output.result, "modify");
-        let new_cmd = output.tool_input.unwrap()["command"].as_str().unwrap().to_string();
+        let new_cmd = output.tool_input.unwrap()["command"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert_eq!(new_cmd, "crux run git status");
     }
 
@@ -95,7 +98,10 @@ mod tests {
         let input = make_input("Bash", "cargo test --release");
         let output = handle_hook(&input).unwrap();
         assert_eq!(output.result, "modify");
-        let new_cmd = output.tool_input.unwrap()["command"].as_str().unwrap().to_string();
+        let new_cmd = output.tool_input.unwrap()["command"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert_eq!(new_cmd, "crux run cargo test --release");
     }
 

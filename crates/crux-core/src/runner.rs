@@ -68,7 +68,10 @@ mod tests {
     fn test_exit_code_capture() {
         let args: Vec<String> = vec!["false".into()];
         let result = run_command(&args).expect("false should execute successfully");
-        assert_ne!(result.exit_code, 0, "false command should have non-zero exit code");
+        assert_ne!(
+            result.exit_code, 0,
+            "false command should have non-zero exit code"
+        );
     }
 
     #[test]
@@ -92,11 +95,7 @@ mod tests {
     #[test]
     fn test_combined_output() {
         // When both stdout and stderr have content, combined should concat them
-        let args: Vec<String> = vec![
-            "sh".into(),
-            "-c".into(),
-            "echo out; echo err >&2".into(),
-        ];
+        let args: Vec<String> = vec!["sh".into(), "-c".into(), "echo out; echo err >&2".into()];
         let result = run_command(&args).expect("sh should succeed");
         assert_eq!(result.stdout.trim(), "out");
         assert_eq!(result.stderr.trim(), "err");

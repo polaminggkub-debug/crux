@@ -70,6 +70,47 @@ pub fn get_gain_summary(conn: &Connection) -> Result<GainSummary> {
     Ok(summary)
 }
 
+/// Per-command savings breakdown.
+pub struct CommandSummary {
+    pub command: String,
+    pub events: i64,
+    pub total_input_bytes: i64,
+    pub total_output_bytes: i64,
+    pub total_savings_bytes: i64,
+    pub avg_savings_pct: f64,
+}
+
+/// Get savings summary grouped by command, ordered by total savings descending.
+pub fn get_per_command_summary(conn: &Connection) -> Result<Vec<CommandSummary>> {
+    let mut stmt = conn.prepare(
+        "SELECT
+            command,
+            COUNT(*) as events,
+            COALESCE(SUM(input_bytes), 0),
+            COALESCE(SUM(output_bytes), 0),
+            COALESCE(SUM(savings_bytes), 0),
+            COALESCE(AVG(savings_pct), 0.0)
+         FROM filter_events
+         GROUP BY command
+         ORDER BY SUM(savings_bytes) DESC",
+    )?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(CommandSummary {
+                command: row.get(0)?,
+                events: row.get(1)?,
+                total_input_bytes: row.get(2)?,
+                total_output_bytes: row.get(3)?,
+                total_savings_bytes: row.get(4)?,
+                avg_savings_pct: row.get(5)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +206,63 @@ mod tests {
         assert_eq!(summary.total_output_bytes, 0);
         assert_eq!(summary.total_savings_bytes, 0);
         assert!((summary.avg_savings_pct - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_per_command_summary_empty() {
+        let conn = open_memory_db().unwrap();
+        let summaries = get_per_command_summary(&conn).unwrap();
+        assert!(summaries.is_empty());
+    }
+
+    #[test]
+    fn test_per_command_summary_groups_by_command() {
+        let conn = open_memory_db().unwrap();
+
+        let events = vec![
+            FilterEvent {
+                command: "cargo test".to_string(),
+                filter_name: Some("cargo-test".to_string()),
+                input_bytes: 1000,
+                output_bytes: 300,
+                exit_code: 0,
+                duration_ms: None,
+            },
+            FilterEvent {
+                command: "cargo test".to_string(),
+                filter_name: Some("cargo-test".to_string()),
+                input_bytes: 2000,
+                output_bytes: 600,
+                exit_code: 0,
+                duration_ms: None,
+            },
+            FilterEvent {
+                command: "git status".to_string(),
+                filter_name: Some("git-status".to_string()),
+                input_bytes: 500,
+                output_bytes: 100,
+                exit_code: 0,
+                duration_ms: None,
+            },
+        ];
+
+        for e in &events {
+            record_event(&conn, e).unwrap();
+        }
+
+        let summaries = get_per_command_summary(&conn).unwrap();
+        assert_eq!(summaries.len(), 2);
+
+        // Ordered by total savings DESC: cargo test saved 2100, git status saved 400
+        assert_eq!(summaries[0].command, "cargo test");
+        assert_eq!(summaries[0].events, 2);
+        assert_eq!(summaries[0].total_input_bytes, 3000);
+        assert_eq!(summaries[0].total_output_bytes, 900);
+        assert_eq!(summaries[0].total_savings_bytes, 2100);
+
+        assert_eq!(summaries[1].command, "git status");
+        assert_eq!(summaries[1].events, 1);
+        assert_eq!(summaries[1].total_savings_bytes, 400);
     }
 
     #[test]

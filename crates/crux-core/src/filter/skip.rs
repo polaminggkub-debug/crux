@@ -4,14 +4,8 @@ use regex::Regex;
 /// Keep takes priority: if both keep and skip are non-empty, keep is applied first,
 /// then skip removes from the kept lines.
 pub fn apply_skip_keep(input: &str, skip: &[String], keep: &[String]) -> String {
-    let keep_regexes: Vec<Regex> = keep
-        .iter()
-        .filter_map(|p| Regex::new(p).ok())
-        .collect();
-    let skip_regexes: Vec<Regex> = skip
-        .iter()
-        .filter_map(|p| Regex::new(p).ok())
-        .collect();
+    let keep_regexes: Vec<Regex> = keep.iter().filter_map(|p| Regex::new(p).ok()).collect();
+    let skip_regexes: Vec<Regex> = skip.iter().filter_map(|p| Regex::new(p).ok()).collect();
 
     let lines: Vec<&str> = input.lines().collect();
     let filtered: Vec<&str> = lines
@@ -54,11 +48,7 @@ mod tests {
     fn keep_takes_priority_over_skip() {
         // Keep "error" lines, but skip lines containing "ignore"
         let input = "error: real problem\nerror: ignore this\ninfo: hello\nerror: also real";
-        let result = apply_skip_keep(
-            input,
-            &["ignore".to_string()],
-            &["^error".to_string()],
-        );
+        let result = apply_skip_keep(input, &["ignore".to_string()], &["^error".to_string()]);
         assert_eq!(result, "error: real problem\nerror: also real");
     }
 
@@ -72,11 +62,7 @@ mod tests {
     #[test]
     fn multiple_skip_patterns() {
         let input = "alpha\nbeta\ngamma\ndelta";
-        let result = apply_skip_keep(
-            input,
-            &["alpha".to_string(), "gamma".to_string()],
-            &[],
-        );
+        let result = apply_skip_keep(input, &["alpha".to_string(), "gamma".to_string()], &[]);
         assert_eq!(result, "beta\ndelta");
     }
 

@@ -122,8 +122,7 @@ pub fn filter_cargo_build(output: &str, exit_code: i32) -> String {
             lines.push(line.to_string());
         }
         // Also keep "could not compile" lines
-        if (trimmed.starts_with("error: could not compile")
-            || trimmed.starts_with("error["))
+        if (trimmed.starts_with("error: could not compile") || trimmed.starts_with("error["))
             && !lines.iter().any(|l| l.trim() == trimmed)
         {
             lines.push(line.to_string());
@@ -148,8 +147,7 @@ pub fn filter_cargo_clippy(output: &str, _exit_code: i32) -> String {
     for line in output.lines() {
         let trimmed = line.trim();
 
-        if diag_re.is_match(trimmed) || location_re.is_match(line) || summary_re.is_match(trimmed)
-        {
+        if diag_re.is_match(trimmed) || location_re.is_match(line) || summary_re.is_match(trimmed) {
             lines.push(line.to_string());
         }
     }

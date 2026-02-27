@@ -37,6 +37,18 @@ pub fn resolve_filter(command: &[String]) -> Option<FilterConfig> {
     // 3. Embedded stdlib
     candidates.extend(load_embedded_stdlib());
 
+    // 4. Builtin registry stubs (lowest priority fallback)
+    // Ensures builtin handlers fire even when no TOML filters exist.
+    for key in crate::filter::builtin::registry().keys() {
+        if !candidates.iter().any(|c| c.command == *key) {
+            candidates.push(FilterConfig {
+                command: key.to_string(),
+                priority: -100,
+                ..Default::default()
+            });
+        }
+    }
+
     find_best_match(&candidates, command)
 }
 
@@ -60,8 +72,7 @@ fn match_score(filter_command: &str, input_command: &str) -> Option<usize> {
 
     // Prefix match: "git" matches "git status", "git diff", etc.
     if input_cmd.starts_with(filter_cmd)
-        && input_cmd[filter_cmd.len()..]
-            .starts_with(char::is_whitespace)
+        && input_cmd[filter_cmd.len()..].starts_with(char::is_whitespace)
     {
         return Some(filter_cmd.split_whitespace().count() * 100);
     }
@@ -155,10 +166,7 @@ fn parse_embedded_dir(dir: &include_dir::Dir<'_>) -> Vec<FilterConfig> {
                 match toml::from_str::<FilterConfig>(contents) {
                     Ok(config) => configs.push(config),
                     Err(e) => {
-                        eprintln!(
-                            "crux: skipping embedded {}: {e}",
-                            file.path().display()
-                        );
+                        eprintln!("crux: skipping embedded {}: {e}", file.path().display());
                     }
                 }
             }
@@ -204,10 +212,7 @@ mod tests {
 
     #[test]
     fn exact_match_wins_over_prefix() {
-        let candidates = vec![
-            make_config("git", 0),
-            make_config("git status", 0),
-        ];
+        let candidates = vec![make_config("git", 0), make_config("git status", 0)];
         let cmd = vec!["git".to_string(), "status".to_string()];
         let result = find_best_match(&candidates, &cmd).unwrap();
         assert_eq!(result.command, "git status");
@@ -231,10 +236,7 @@ mod tests {
 
     #[test]
     fn higher_priority_wins_when_same_specificity() {
-        let candidates = vec![
-            make_config("git status", 5),
-            make_config("git status", 10),
-        ];
+        let candidates = vec![make_config("git status", 5), make_config("git status", 10)];
         let cmd = vec!["git".to_string(), "status".to_string()];
         let result = find_best_match(&candidates, &cmd).unwrap();
         assert_eq!(result.priority, 10);
@@ -250,6 +252,23 @@ mod tests {
     fn match_score_no_partial_word_match() {
         // "git" should NOT match "gitk"
         assert!(match_score("git", "gitk").is_none());
+    }
+
+    #[test]
+    fn builtin_stubs_provide_fallback_match() {
+        // Even with no TOML files, builtin commands should resolve
+        let cmd = vec!["git".to_string(), "status".to_string()];
+        let result = resolve_filter(&cmd);
+        assert!(result.is_some(), "git status should match via builtin stub");
+        assert_eq!(result.unwrap().command, "git status");
+    }
+
+    #[test]
+    fn builtin_stubs_for_cargo_test() {
+        let cmd = vec!["cargo".to_string(), "test".to_string()];
+        let result = resolve_filter(&cmd);
+        assert!(result.is_some(), "cargo test should match via builtin stub");
+        assert_eq!(result.unwrap().command, "cargo test");
     }
 
     #[test]
