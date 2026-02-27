@@ -1,0 +1,13 @@
+command = "pnpm"
+description = "Filter pnpm output: skip progress and resolution noise"
+priority = 0
+strip_ansi = true
+
+skip = [
+    "^Progress:",
+    "^Packages: \\+",
+    "^\\s*$",
+]
+
+collapse_blank_lines = true
+trim_trailing_whitespace = true

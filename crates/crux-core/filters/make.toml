@@ -1,0 +1,12 @@
+command = "make"
+description = "Filter make output: strip entering/leaving directory noise"
+priority = 0
+strip_ansi = true
+
+skip = [
+    "^make\\[\\d+\\]: (Entering|Leaving) directory",
+    "^make\\[\\d+\\]: Nothing to be done",
+]
+
+collapse_blank_lines = true
+trim_trailing_whitespace = true
