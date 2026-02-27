@@ -56,6 +56,34 @@ pub struct FilterConfig {
     // -- Variants --
     #[serde(default)]
     pub variant: Vec<VariantRule>,
+
+    // -- Tee mode --
+    #[serde(default)]
+    pub tee: Option<TeeMode>,
+
+    // -- Lua escape hatch (only available with "lua" feature) --
+    #[cfg(feature = "lua")]
+    #[serde(default)]
+    pub lua: Option<LuaConfig>,
+}
+
+/// Tee mode: save raw output for debugging/recovery.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TeeMode {
+    Never,
+    Failures,
+    Always,
+}
+
+/// Lua escape hatch configuration.
+#[cfg(feature = "lua")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LuaConfig {
+    /// Path to a Lua file to execute.
+    pub file: Option<String>,
+    /// Inline Lua source code.
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

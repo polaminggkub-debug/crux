@@ -1,4 +1,15 @@
+use std::collections::HashMap;
+
 use regex::Regex;
+
+use super::BuiltinFilterFn;
+
+/// Register npm handlers.
+pub fn register(m: &mut HashMap<&'static str, BuiltinFilterFn>) {
+    m.insert("npm test", filter_npm_test as BuiltinFilterFn);
+    m.insert("npm install", filter_npm_install as BuiltinFilterFn);
+    m.insert("npm run build", filter_npm_build as BuiltinFilterFn);
+}
 
 /// Filter npm test output: show pass/fail summary. On failure, show failing test names.
 pub fn filter_npm_test(output: &str, exit_code: i32) -> String {
@@ -69,6 +80,75 @@ pub fn filter_npm_test(output: &str, exit_code: i32) -> String {
     }
 
     output_parts.join("\n")
+}
+
+/// Filter npm install: show summary of added/removed packages.
+pub fn filter_npm_install(output: &str, exit_code: i32) -> String {
+    let mut lines = Vec::new();
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("added ")
+            || trimmed.starts_with("removed ")
+            || trimmed.starts_with("changed ")
+            || trimmed.starts_with("up to date")
+            || trimmed.contains("packages in")
+            || trimmed.starts_with("npm warn")
+            || trimmed.starts_with("npm ERR!")
+        {
+            lines.push(trimmed.to_string());
+        }
+    }
+    if lines.is_empty() {
+        if exit_code == 0 {
+            "Installed successfully.".to_string()
+        } else {
+            format!("Install failed (exit code {exit_code}).")
+        }
+    } else {
+        lines.join("\n")
+    }
+}
+
+/// Filter npm run build: keep error/warning lines and summary.
+pub fn filter_npm_build(output: &str, exit_code: i32) -> String {
+    if exit_code == 0 {
+        // Look for build summary lines
+        let mut summary = Vec::new();
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if trimmed.contains("compiled successfully")
+                || trimmed.contains("Build complete")
+                || trimmed.contains("built in")
+                || trimmed.starts_with("✓")
+                || trimmed.starts_with("✔")
+            {
+                summary.push(trimmed.to_string());
+            }
+        }
+        if summary.is_empty() {
+            "Build completed successfully.".to_string()
+        } else {
+            summary.join("\n")
+        }
+    } else {
+        let mut lines = Vec::new();
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("error")
+                || trimmed.starts_with("Error")
+                || trimmed.starts_with("ERROR")
+                || trimmed.starts_with("npm ERR!")
+                || trimmed.contains("Failed to compile")
+            {
+                lines.push(trimmed.to_string());
+            }
+        }
+        if lines.is_empty() {
+            format!("Build failed (exit code {exit_code}).")
+        } else {
+            lines.join("\n")
+        }
+    }
 }
 
 #[cfg(test)]

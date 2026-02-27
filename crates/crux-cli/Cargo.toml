@@ -14,6 +14,9 @@ crux-core = { path = "../crux-core" }
 crux-tracking = { path = "../crux-tracking", optional = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
+toml = { workspace = true }
+regex = { workspace = true }
+serde_json = { workspace = true }
 
 [features]
 default = ["tracking"]

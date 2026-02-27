@@ -1,3 +1,5 @@
+mod commands;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::time::Instant;
@@ -13,29 +15,24 @@ struct Cli {
 enum Commands {
     /// Run a command through the filter pipeline
     Run {
-        /// Command and arguments to execute
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
     },
     /// Show token savings summary
     Gain {
-        /// Show per-command breakdown
         #[arg(long)]
         by_command: bool,
     },
     /// Show recent command history
     #[cfg(feature = "tracking")]
     History {
-        /// Number of entries to show
         #[arg(short, long, default_value = "20")]
         limit: usize,
     },
-    /// Install Claude Code hook or Codex skill
+    /// Install Claude Code hook
     Init {
-        /// Install Claude Code hook globally
         #[arg(long, group = "target")]
         global: bool,
-        /// Install Codex skill
         #[arg(long, group = "target")]
         codex: bool,
     },
@@ -43,22 +40,30 @@ enum Commands {
     Ls,
     /// Show which filter matches a command
     Which {
-        /// Command to check
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
     },
     /// Show filter config details
-    Show {
-        /// Filter name to show
-        filter: String,
-    },
+    Show { filter: String },
     /// Export builtin filter as TOML for customization
-    Eject {
-        /// Filter name to eject
-        filter: String,
-    },
+    Eject { filter: String },
     /// Run declarative filter tests
     Verify,
+    /// Keep only error/warning lines from command output
+    Err {
+        #[arg(trailing_var_arg = true, required = true)]
+        command: Vec<String>,
+    },
+    /// Extract test summary from command output
+    Test {
+        #[arg(trailing_var_arg = true, required = true)]
+        command: Vec<String>,
+    },
+    /// Run command with dedup and collapse filters
+    Log {
+        #[arg(trailing_var_arg = true, required = true)]
+        command: Vec<String>,
+    },
 }
 
 fn main() {
@@ -69,12 +74,15 @@ fn main() {
         Commands::Gain { by_command } => cmd_gain(by_command),
         #[cfg(feature = "tracking")]
         Commands::History { limit } => cmd_history(limit),
-        Commands::Init { global, codex } => cmd_init(global, codex),
-        Commands::Ls => cmd_stub("ls"),
+        Commands::Init { global, codex } => commands::cmd_init(global, codex),
+        Commands::Ls => commands::cmd_ls(),
         Commands::Which { command } => cmd_which(&command),
-        Commands::Show { filter } => cmd_stub_with_arg("show", &filter),
-        Commands::Eject { filter } => cmd_stub_with_arg("eject", &filter),
-        Commands::Verify => cmd_stub("verify"),
+        Commands::Show { filter } => commands::cmd_show(&filter),
+        Commands::Eject { filter } => commands::cmd_eject(&filter),
+        Commands::Verify => commands::cmd_verify(),
+        Commands::Err { command } => commands::cmd_err(&command),
+        Commands::Test { command } => commands::cmd_test(&command),
+        Commands::Log { command } => commands::cmd_log(&command),
     };
 
     if let Err(e) = result {
@@ -83,19 +91,17 @@ fn main() {
     }
 }
 
-/// Run a command through the filter pipeline.
+// ---------------------------------------------------------------------------
+// Run
+// ---------------------------------------------------------------------------
+
 fn cmd_run(command: &[String]) -> Result<()> {
     let start = Instant::now();
-
-    // 1. Resolve matching filter
     let filter = crux_core::config::resolve_filter(command);
-
-    // 2. Execute the command
     let result = crux_core::runner::run_command(command)?;
     let raw_output = &result.combined;
     let input_bytes = raw_output.len();
 
-    // 3. Apply filter (or passthrough)
     let filtered = if let Some(ref config) = filter {
         crux_core::filter::apply_filter(config, raw_output, result.exit_code)
     } else {
@@ -103,19 +109,15 @@ fn cmd_run(command: &[String]) -> Result<()> {
     };
     let output_bytes = filtered.len();
 
-    // 4. Print filtered output
     print!("{filtered}");
-    // Ensure trailing newline
     if !filtered.ends_with('\n') && !filtered.is_empty() {
         println!();
     }
 
-    // 5. Print exit code if non-zero
     if result.exit_code != 0 {
         eprintln!("crux: exit code {}", result.exit_code);
     }
 
-    // 6. Record tracking event and history (if feature enabled)
     #[cfg(feature = "tracking")]
     {
         let duration_ms = start.elapsed().as_millis() as u64;
@@ -133,11 +135,9 @@ fn cmd_run(command: &[String]) -> Result<()> {
         }
     }
 
-    // Suppress unused variable warning when tracking is disabled
     #[cfg(not(feature = "tracking"))]
     let _ = start;
 
-    // 7. Print savings summary to stderr
     if input_bytes > 0 && input_bytes != output_bytes {
         let saved_pct = ((input_bytes - output_bytes) as f64 / input_bytes as f64) * 100.0;
         eprintln!("crux: {input_bytes} → {output_bytes} bytes ({saved_pct:.0}% saved)");
@@ -145,6 +145,10 @@ fn cmd_run(command: &[String]) -> Result<()> {
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Tracking helpers
+// ---------------------------------------------------------------------------
 
 #[cfg(feature = "tracking")]
 #[allow(clippy::too_many_arguments)]
@@ -184,7 +188,10 @@ fn record_tracking_and_history(
     Ok(())
 }
 
-/// Show token savings summary.
+// ---------------------------------------------------------------------------
+// Gain
+// ---------------------------------------------------------------------------
+
 fn cmd_gain(by_command: bool) -> Result<()> {
     #[cfg(feature = "tracking")]
     {
@@ -197,7 +204,6 @@ fn cmd_gain(by_command: bool) -> Result<()> {
                 println!("No filter events recorded yet. Run some commands through crux first!");
                 return Ok(());
             }
-
             println!(
                 "{:<30} {:>5} {:>12} {:>12} {:>6}",
                 "COMMAND", "RUNS", "INPUT", "SAVED", "AVG%"
@@ -215,12 +221,10 @@ fn cmd_gain(by_command: bool) -> Result<()> {
             }
         } else {
             let summary = crux_tracking::events::get_gain_summary(&conn)?;
-
             if summary.total_events == 0 {
                 println!("No filter events recorded yet. Run some commands through crux first!");
                 return Ok(());
             }
-
             println!("crux token savings summary");
             println!("──────────────────────────");
             println!("Total events:  {}", summary.total_events);
@@ -240,7 +244,10 @@ fn cmd_gain(by_command: bool) -> Result<()> {
     }
 }
 
-/// Show recent command history.
+// ---------------------------------------------------------------------------
+// History
+// ---------------------------------------------------------------------------
+
 #[cfg(feature = "tracking")]
 fn cmd_history(limit: usize) -> Result<()> {
     let db_path = crux_tracking::db::default_db_path()?;
@@ -270,19 +277,10 @@ fn cmd_history(limit: usize) -> Result<()> {
     Ok(())
 }
 
-/// Install hooks/skills.
-fn cmd_init(global: bool, codex: bool) -> Result<()> {
-    if codex {
-        eprintln!("crux init --codex: not yet implemented");
-    } else if global {
-        eprintln!("crux init --global: not yet implemented");
-    } else {
-        eprintln!("crux init: specify --global or --codex");
-    }
-    Ok(())
-}
+// ---------------------------------------------------------------------------
+// Which
+// ---------------------------------------------------------------------------
 
-/// Show which filter matches a command.
 fn cmd_which(command: &[String]) -> Result<()> {
     match crux_core::config::resolve_filter(command) {
         Some(config) => {
@@ -299,15 +297,9 @@ fn cmd_which(command: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn cmd_stub(name: &str) -> Result<()> {
-    eprintln!("crux {name}: not yet implemented");
-    Ok(())
-}
-
-fn cmd_stub_with_arg(name: &str, arg: &str) -> Result<()> {
-    eprintln!("crux {name} {arg}: not yet implemented");
-    Ok(())
-}
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 fn truncate_str(s: &str, max: usize) -> String {
     if s.len() <= max {

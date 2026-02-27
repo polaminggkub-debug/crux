@@ -1,4 +1,18 @@
+use std::collections::HashMap;
+
 use regex::Regex;
+
+use super::BuiltinFilterFn;
+
+/// Register cargo handlers.
+pub fn register(m: &mut HashMap<&'static str, BuiltinFilterFn>) {
+    m.insert("cargo test", filter_cargo_test as BuiltinFilterFn);
+    m.insert("cargo build", filter_cargo_build as BuiltinFilterFn);
+    m.insert("cargo clippy", filter_cargo_clippy as BuiltinFilterFn);
+    m.insert("cargo check", filter_cargo_check as BuiltinFilterFn);
+    m.insert("cargo fmt", filter_cargo_fmt as BuiltinFilterFn);
+    m.insert("cargo install", filter_cargo_install as BuiltinFilterFn);
+}
 
 /// Filter cargo test output: show summary, on failure show failing tests + errors.
 pub fn filter_cargo_test(output: &str, exit_code: i32) -> String {
@@ -156,6 +170,81 @@ pub fn filter_cargo_clippy(output: &str, _exit_code: i32) -> String {
         "No warnings or errors.".to_string()
     } else {
         lines.join("\n")
+    }
+}
+
+/// Filter cargo check: same as cargo build (errors-only on failure).
+pub fn filter_cargo_check(output: &str, exit_code: i32) -> String {
+    if exit_code == 0 {
+        return "Check passed.".to_string();
+    }
+    filter_cargo_build(output, exit_code)
+}
+
+/// Filter cargo fmt: show diff summary or "Formatted."
+pub fn filter_cargo_fmt(output: &str, exit_code: i32) -> String {
+    if exit_code == 0 {
+        if output.trim().is_empty() {
+            return "Already formatted.".to_string();
+        }
+        // cargo fmt --check shows diffs
+        let diff_files: Vec<&str> = output
+            .lines()
+            .filter(|l| l.starts_with("Diff in"))
+            .collect();
+        if diff_files.is_empty() {
+            return "Formatted.".to_string();
+        }
+        return diff_files.join("\n");
+    }
+    // On failure, keep diff file names and error lines
+    let mut lines = Vec::new();
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("Diff in") || trimmed.starts_with("error") {
+            lines.push(trimmed.to_string());
+        }
+    }
+    if lines.is_empty() {
+        format!("Format check failed (exit code {exit_code}).")
+    } else {
+        lines.join("\n")
+    }
+}
+
+/// Filter cargo install: show what was installed.
+pub fn filter_cargo_install(output: &str, exit_code: i32) -> String {
+    if exit_code == 0 {
+        let mut lines = Vec::new();
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("Installing")
+                || trimmed.starts_with("Installed")
+                || trimmed.starts_with("Replacing")
+                || trimmed.starts_with("Replaced")
+                || trimmed.contains("is already installed")
+            {
+                lines.push(trimmed.to_string());
+            }
+        }
+        if lines.is_empty() {
+            "Installed successfully.".to_string()
+        } else {
+            lines.join("\n")
+        }
+    } else {
+        let mut lines = Vec::new();
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("error") {
+                lines.push(trimmed.to_string());
+            }
+        }
+        if lines.is_empty() {
+            format!("Install failed (exit code {exit_code}).")
+        } else {
+            lines.join("\n")
+        }
     }
 }
 

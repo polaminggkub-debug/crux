@@ -1,3 +1,5 @@
+#[cfg(feature = "cache")]
+pub mod cache;
 pub mod resolve;
 pub mod types;
 

@@ -1,4 +1,16 @@
+use std::collections::HashMap;
+
 use regex::Regex;
+
+use super::BuiltinFilterFn;
+
+/// Register core git handlers.
+pub fn register(m: &mut HashMap<&'static str, BuiltinFilterFn>) {
+    m.insert("git status", filter_git_status as BuiltinFilterFn);
+    m.insert("git diff", filter_git_diff as BuiltinFilterFn);
+    m.insert("git log", filter_git_log as BuiltinFilterFn);
+    m.insert("git push", filter_git_push as BuiltinFilterFn);
+}
 
 /// Filter git status: keep branch line and file status lines, strip hints and boilerplate.
 pub fn filter_git_status(output: &str, _exit_code: i32) -> String {
