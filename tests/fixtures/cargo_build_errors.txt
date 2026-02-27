@@ -1,0 +1,63 @@
+   Compiling crux-core v0.2.0 (/home/runner/work/crux/crates/crux-core)
+error[E0308]: mismatched types
+  --> crates/crux-core/src/filter/builtin/cargo.rs:45:20
+   |
+45 |     let result: i32 = filter_output(input);
+   |                 ---   ^^^^^^^^^^^^^^^^^^^^ expected `i32`, found `String`
+   |                 |
+   |                 expected due to this
+   |
+help: try using a conversion method
+   |
+45 |     let result: i32 = filter_output(input).parse().unwrap();
+   |                                           +++++++++++++++++
+
+error[E0433]: failed to resolve: use of undeclared type `FilterChain`
+  --> crates/crux-core/src/filter/mod.rs:28:17
+   |
+28 |     let chain = FilterChain::new(filters);
+   |                 ^^^^^^^^^^^ use of undeclared type `FilterChain`
+   |
+help: consider importing this struct
+   |
+1  + use crate::filter::chain::FilterChain;
+   |
+
+error[E0599]: no method named `apply_filter` found for struct `Pipeline` in the current scope
+   --> crates/crux-core/src/filter/mod.rs:65:14
+    |
+65  |     pipeline.apply_filter(input, exit_code)
+    |              ^^^^^^^^^^^^ method not found in `Pipeline`
+    |
+note: the method `apply` exists on the struct `Pipeline`
+   --> crates/crux-core/src/filter/pipeline.rs:18:5
+    |
+18  |     pub fn apply(&self, input: &str, exit_code: i32) -> String {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0061]: this function takes 2 arguments but 3 were supplied
+   --> crates/crux-core/src/config/resolution.rs:52:12
+    |
+52  |     resolve(command, config, extra_arg)
+    |     -------                  ^^^^^^^^^ unexpected argument
+    |
+note: function defined here
+   --> crates/crux-core/src/config/resolution.rs:12:8
+    |
+12  | pub fn resolve(command: &str, config: &Config) -> Option<FilterDef> {
+    |        ^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> crates/crux-core/src/filter/builtin/git.rs:1:5
+  |
+1 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+error: aborting due to 4 previous errors; 1 warning emitted
+
+Some errors have detailed explanations: E0061, E0308, E0433, E0599.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `crux-core` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...

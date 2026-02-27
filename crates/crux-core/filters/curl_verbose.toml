@@ -1,0 +1,21 @@
+command = "curl"
+description = "Filter curl verbose output: keep response headers and body, skip connection noise"
+priority = 0
+strip_ansi = true
+
+skip = [
+    "^\\*\\s+Trying ",
+    "^\\*\\s+Connected to ",
+    "^\\*\\s+TCP_NODELAY ",
+    "^\\*\\s+TLS",
+    "^\\*\\s+SSL",
+    "^\\*\\s+ALPN",
+    "^\\*\\s+CAfile:",
+    "^\\*\\s+CApath:",
+    "^\\*\\s+Connection .* left intact",
+    "^\\*\\s+Closing connection",
+    "^> ",
+]
+
+collapse_blank_lines = true
+trim_trailing_whitespace = true

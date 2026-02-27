@@ -1,0 +1,5 @@
+NAME                                    READY   STATUS    RESTARTS   AGE
+[0mnginx-deployment-5d8b4f9b7-abc12       1/1     Running   0          3d[0m
+[0mnginx-deployment-5d8b4f9b7-def34       1/1     Running   0          3d[0m
+[0mredis-master-0                          1/1     Running   2          7d[0m
+[0mcelery-worker-7c6f8d9e5-gh567          0/1     CrashLoopBackOff   5          1d[0m

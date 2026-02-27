@@ -1,0 +1,13 @@
+make[1]: Entering directory '/home/user/project/src'
+gcc -c -o main.o main.c
+gcc -c -o utils.o utils.c
+make[1]: Leaving directory '/home/user/project/src'
+make[2]: Entering directory '/home/user/project/lib'
+gcc -c -o libfoo.o libfoo.c
+ar rcs libfoo.a libfoo.o
+make[2]: Leaving directory '/home/user/project/lib'
+make[1]: Entering directory '/home/user/project/src'
+gcc -o myapp main.o utils.o -L../lib -lfoo
+make[1]: Leaving directory '/home/user/project/src'
+make[1]: Nothing to be done for 'clean'.
+Build complete: myapp

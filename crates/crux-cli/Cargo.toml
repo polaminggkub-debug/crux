@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 crux-core = { path = "../crux-core" }
+crux-hook = { path = "../crux-hook" }
 crux-tracking = { path = "../crux-tracking", optional = true }
 anyhow = { workspace = true }
 clap = { workspace = true }

@@ -227,6 +227,7 @@ dependencies = [
  "anyhow",
  "clap",
  "crux-core",
+ "crux-hook",
  "crux-tracking",
  "regex",
  "serde_json",

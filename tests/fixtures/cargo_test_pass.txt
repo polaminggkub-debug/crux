@@ -1,0 +1,63 @@
+   Compiling proc-macro2 v1.0.78
+   Compiling unicode-ident v1.0.12
+   Compiling serde v1.0.197
+   Compiling quote v1.0.35
+   Compiling syn v2.0.48
+   Compiling serde_derive v1.0.197
+   Compiling toml v0.8.10
+   Compiling crux-core v0.2.0 (/home/runner/work/crux/crates/crux-core)
+   Compiling crux-cli v0.2.0 (/home/runner/work/crux/crates/crux-cli)
+   Compiling crux-tracking v0.2.0 (/home/runner/work/crux/crates/crux-tracking)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.47s
+     Running unittests src/lib.rs (target/debug/deps/crux_core-a1b2c3d4e5f6a7b8)
+
+running 20 tests
+test config::tests::load_default_config ... ok
+test config::tests::load_custom_config_path ... ok
+test config::tests::missing_config_returns_error ... ok
+test config::tests::invalid_toml_returns_parse_error ... ok
+test config::resolution::tests::local_overrides_global ... ok
+test config::resolution::tests::first_match_wins ... ok
+test config::resolution::tests::passthrough_on_missing ... ok
+test filter::tests::skip_filter_removes_lines ... ok
+test filter::tests::replace_filter_substitutes ... ok
+test filter::tests::section_filter_extracts_range ... ok
+test filter::tests::chain_filters_compose ... ok
+test filter::builtin::git::tests::git_status_filters_hints ... ok
+test filter::builtin::git::tests::git_status_clean ... ok
+test filter::builtin::git::tests::git_diff_summarizes_hunks ... ok
+test filter::builtin::git::tests::git_log_compacts_commits ... ok
+test filter::builtin::cargo::tests::cargo_test_success ... ok
+test filter::builtin::cargo::tests::cargo_build_success ... ok
+test filter::builtin::cargo::tests::cargo_build_failure ... ok
+test filter::builtin::docker::tests::docker_ps_strips_ports_column ... ok
+test filter::builtin::docker::tests::docker_ps_empty_output ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running unittests src/main.rs (target/debug/deps/crux_cli-b2c3d4e5f6a7b8c9)
+
+running 3 tests
+test cli::tests::parse_run_command ... ok
+test cli::tests::parse_config_subcommand ... ok
+test cli::tests::default_passthrough ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/cli_integration.rs (target/debug/deps/cli_integration-c3d4e5f6a7b8c9d0)
+
+running 4 tests
+test test_run_echo ... ok
+test test_run_with_filter ... ok
+test test_config_show ... ok
+test test_exit_code_passthrough ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.85s
+
+   Doc-tests crux-core
+
+running 2 tests
+test src/lib.rs - example_usage (line 15) ... ok
+test src/filter/mod.rs - filter_pipeline (line 8) ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s

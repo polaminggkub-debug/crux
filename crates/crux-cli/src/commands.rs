@@ -128,6 +128,20 @@ pub fn cmd_verify() -> Result<()> {
     let mut total = 0;
     let mut passed = 0;
 
+    // 1. Embedded stdlib test suites (compiled into the binary)
+    let embedded = crux_core::verify::verify_embedded_stdlib();
+    for tr in &embedded.results {
+        total += 1;
+        if tr.passed {
+            passed += 1;
+            println!("  PASS  {}", tr.name);
+        } else {
+            println!("  FAIL  {}", tr.name);
+            print_diff(&tr.expected, &tr.actual);
+        }
+    }
+
+    // 2. Filesystem test suites (local + global)
     verify_dir(Path::new(".crux/filters"), &mut total, &mut passed)?;
     if let Some(home) = home_dir() {
         verify_dir(&home.join(".config/crux/filters"), &mut total, &mut passed)?;
@@ -135,7 +149,7 @@ pub fn cmd_verify() -> Result<()> {
 
     if total == 0 {
         println!("No test cases found. Add _test/ directories next to filter TOMLs.");
-        println!("Each _test/ dir should contain pairs: <name>.input and <name>.expected");
+        println!("Each _test/ dir should contain input.txt/expected.txt or <name>.input/<name>.expected pairs.");
     } else {
         println!("\n{passed}/{total} tests passed");
         if passed < total {
@@ -143,6 +157,21 @@ pub fn cmd_verify() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Print a unified-style diff between expected and actual output.
+fn print_diff(expected: &str, actual: &str) {
+    let expected_lines: Vec<&str> = expected.trim().lines().collect();
+    let actual_lines: Vec<&str> = actual.trim().lines().collect();
+    let max_lines = expected_lines.len().max(actual_lines.len());
+    for i in 0..max_lines {
+        let exp = expected_lines.get(i).unwrap_or(&"");
+        let act = actual_lines.get(i).unwrap_or(&"");
+        if exp != act {
+            println!("    - {exp}");
+            println!("    + {act}");
+        }
+    }
 }
 
 fn verify_dir(dir: &Path, total: &mut usize, passed: &mut usize) -> Result<()> {
@@ -176,6 +205,26 @@ fn run_test_suite(
     let contents = std::fs::read_to_string(toml_path)?;
     let config: crux_core::config::FilterConfig = toml::from_str(&contents)?;
 
+    // Check for input.txt / expected.txt pair (single test case)
+    let input_txt = test_dir.join("input.txt");
+    let expected_txt = test_dir.join("expected.txt");
+    if input_txt.exists() && expected_txt.exists() {
+        *total += 1;
+        let input = std::fs::read_to_string(&input_txt)?;
+        let expected = std::fs::read_to_string(&expected_txt)?;
+        let actual = crux_core::filter::apply_filter(&config, &input, 0);
+
+        let test_name = format!("{}::default", config.command);
+        if actual.trim() == expected.trim() {
+            *passed += 1;
+            println!("  PASS  {test_name}");
+        } else {
+            println!("  FAIL  {test_name}");
+            print_diff(&expected, &actual);
+        }
+    }
+
+    // Check for <name>.input / <name>.expected pairs
     let Ok(rd) = std::fs::read_dir(test_dir) else {
         return Ok(());
     };
@@ -198,8 +247,7 @@ fn run_test_suite(
                 println!("  PASS  {test_name}");
             } else {
                 println!("  FAIL  {test_name}");
-                println!("    expected: {:?}", expected.trim());
-                println!("    actual:   {:?}", actual.trim());
+                print_diff(&expected, &actual);
             }
         }
     }
@@ -212,8 +260,7 @@ fn run_test_suite(
 
 pub fn cmd_init(global: bool, codex: bool) -> Result<()> {
     if codex {
-        eprintln!("crux init --codex: not yet implemented");
-        return Ok(());
+        return crux_hook::codex::install_codex_skill();
     }
 
     let settings_path = if global {

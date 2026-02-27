@@ -1,0 +1,6 @@
+CONTAINER ID   IMAGE                    COMMAND                  CREATED          STATUS                    PORTS                                       NAMES
+a1b2c3d4e5f6   nginx:1.25-alpine        "/docker-entrypoint.…"   2 hours ago      Up 2 hours                0.0.0.0:80->80/tcp, 0.0.0.0:443->443/tcp   myapp-nginx-1
+b2c3d4e5f6a7   myapp-api:latest         "./server --port 300…"   2 hours ago      Up 2 hours                0.0.0.0:3000->3000/tcp                      myapp-api-1
+c3d4e5f6a7b8   postgres:16.2-alpine     "docker-entrypoint.s…"   2 hours ago      Up 2 hours (healthy)      0.0.0.0:5432->5432/tcp                      myapp-db-1
+d4e5f6a7b8c9   redis:7.2-alpine         "docker-entrypoint.s…"   2 hours ago      Up 2 hours (healthy)      0.0.0.0:6379->6379/tcp                      myapp-redis-1
+e5f6a7b8c9d0   grafana/grafana:10.3.1   "/run.sh"                45 minutes ago   Up 45 minutes             0.0.0.0:3001->3000/tcp                      monitoring-grafana-1

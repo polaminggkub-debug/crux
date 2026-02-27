@@ -1,0 +1,14 @@
+command = "rustc"
+description = "Filter rustc output: keep errors, warnings, notes, and suggestions"
+priority = 0
+strip_ansi = true
+
+skip = [
+    "^\\s*Compiling ",
+    "^\\s*Finished ",
+    "^\\s*Running ",
+    "^\\s*Fresh ",
+]
+
+collapse_blank_lines = true
+trim_trailing_whitespace = true

@@ -1,0 +1,87 @@
+diff --git a/src/config.rs b/src/config.rs
+index 3a4b5c6..7d8e9f0 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -1,8 +1,12 @@
+ use std::path::PathBuf;
++use std::collections::HashMap;
+ use serde::Deserialize;
+
+ #[derive(Debug, Deserialize)]
+ pub struct Config {
+     pub database_url: String,
++    pub redis_url: Option<String>,
+     pub port: u16,
++    pub max_connections: u32,
++    pub feature_flags: HashMap<String, bool>,
+ }
+@@ -15,6 +19,14 @@
+ impl Config {
+     pub fn load() -> Result<Self, ConfigError> {
+-        let path = std::env::var("CONFIG_PATH").unwrap_or_else(|_| "config.toml".into());
++        let path = std::env::var("CONFIG_PATH")
++            .unwrap_or_else(|_| "config.toml".into());
++        let content = std::fs::read_to_string(&path)
++            .map_err(|e| ConfigError::IoError(e))?;
++        toml::from_str(&content)
++            .map_err(|e| ConfigError::ParseError(e.to_string()))
++    }
++
++    pub fn default_port() -> u16 {
++        8080
+     }
+ }
+diff --git a/src/server.rs b/src/server.rs
+index 1a2b3c4..5d6e7f8 100644
+--- a/src/server.rs
++++ b/src/server.rs
+@@ -22,7 +22,7 @@
+     pub async fn start(&self) -> Result<(), ServerError> {
+-        log::info!("Starting server on port {}", self.config.port);
++        tracing::info!(port = self.config.port, "Starting server");
+         let listener = TcpListener::bind(
+             format!("0.0.0.0:{}", self.config.port)
+         ).await?;
+@@ -45,3 +45,15 @@
+         Ok(())
+     }
++
++    pub async fn graceful_shutdown(&self) {
++        tracing::info!("Initiating graceful shutdown");
++        self.shutdown_signal.send(()).ok();
++        tokio::time::sleep(Duration::from_secs(5)).await;
++        tracing::info!("Shutdown complete");
++    }
++
++    pub fn health_check(&self) -> bool {
++        self.is_running.load(Ordering::SeqCst)
++    }
+ }
+diff --git a/tests/server_test.rs b/tests/server_test.rs
+index 9a0b1c2..3d4e5f6 100644
+--- a/tests/server_test.rs
++++ b/tests/server_test.rs
+@@ -10,6 +10,22 @@
+ async fn test_server_starts() {
+     let config = Config { port: 0, database_url: "sqlite::memory:".into() };
+-    let server = Server::new(config);
++    let config = Config {
++        port: 0,
++        database_url: "sqlite::memory:".into(),
++        redis_url: None,
++        max_connections: 10,
++        feature_flags: HashMap::new(),
++    };
++    let server = Server::new(config).await.unwrap();
+     assert!(server.health_check());
+ }
++
++#[tokio::test]
++async fn test_graceful_shutdown() {
++    let server = create_test_server().await;
++    server.start().await.unwrap();
++    server.graceful_shutdown().await;
++    assert!(!server.health_check());
++}
+
+ 3 files changed, 38 insertions(+), 5 deletions(-)

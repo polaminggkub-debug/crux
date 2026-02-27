@@ -1,0 +1,10 @@
+#342	feat(auth): add OAuth2 provider support	feature/oauth-providers	OPEN	2026-02-27T16:42:13Z
+#339	fix(api): handle null response in health check	fix/null-health-check	OPEN	2026-02-27T14:18:05Z
+#337	refactor(config): migrate to TOML configuration	refactor/toml-config	OPEN	2026-02-26T22:01:47Z
+#335	test(server): add graceful shutdown integration tests	test/shutdown-tests	OPEN	2026-02-26T17:33:29Z
+#331	fix(db): prevent connection pool exhaustion	fix/pool-exhaustion	MERGED	2026-02-25T11:15:08Z
+#328	perf(query): optimize N+1 in user listing	perf/user-query	MERGED	2026-02-24T20:22:31Z
+#325	feat(middleware): request tracing with correlation IDs	feature/tracing	MERGED	2026-02-24T15:47:19Z
+#320	chore(deps): bump tokio 1.36, serde 1.0.197	chore/bump-deps	MERGED	2026-02-23T13:04:55Z
+
+Showing 8 of 42 pull requests
