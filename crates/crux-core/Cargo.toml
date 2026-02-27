@@ -1,0 +1,16 @@
+[package]
+name = "crux-core"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+description = "Core library for crux: filter engine, config, types"
+
+[dependencies]
+anyhow = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+memchr = { workspace = true }
+include_dir = { workspace = true }
+
+[dev-dependencies]

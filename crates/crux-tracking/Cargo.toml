@@ -1,0 +1,11 @@
+[package]
+name = "crux-tracking"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+description = "Token savings tracking and history for crux"
+
+[dependencies]
+anyhow = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }

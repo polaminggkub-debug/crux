@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/crux-core",
+    "crates/crux-cli",
+    "crates/crux-hook",
+    "crates/crux-tracking",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/polam/crux"
+rust-version = "1.75"
+
+[workspace.dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+rusqlite = { version = "0.31", features = ["bundled"] }
+memchr = "2"
+rkyv = { version = "0.7", features = ["validation"] }
+include_dir = "0.7"
+mlua = { version = "0.9", features = ["luau", "vendored"] }

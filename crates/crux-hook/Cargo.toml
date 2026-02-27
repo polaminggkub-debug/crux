@@ -1,0 +1,11 @@
+[package]
+name = "crux-hook"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+description = "Agent integration hooks for crux (Claude Code, Codex)"
+
+[dependencies]
+crux-core = { path = "../crux-core" }
+anyhow = { workspace = true }
+serde = { workspace = true }
