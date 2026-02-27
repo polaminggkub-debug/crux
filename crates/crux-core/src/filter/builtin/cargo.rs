@@ -55,17 +55,16 @@ pub fn filter_cargo_test(output: &str, exit_code: i32) -> String {
             }
 
             // Failure content — keep assertion/panic lines
-            if !trimmed.is_empty() {
-                if trimmed.contains("panicked at")
+            if !trimmed.is_empty()
+                && (trimmed.contains("panicked at")
                     || trimmed.contains("assertion")
                     || trimmed.starts_with("thread")
                     || trimmed.starts_with("left:")
                     || trimmed.starts_with("right:")
                     || trimmed.contains("called `Result::unwrap()`")
-                    || trimmed.contains("expected")
-                {
-                    current_failure.push(format!("  {trimmed}"));
-                }
+                    || trimmed.contains("expected"))
+            {
+                current_failure.push(format!("  {trimmed}"));
             }
             continue;
         }
@@ -123,12 +122,11 @@ pub fn filter_cargo_build(output: &str, exit_code: i32) -> String {
             lines.push(line.to_string());
         }
         // Also keep "could not compile" lines
-        if trimmed.starts_with("error: could not compile")
-            || trimmed.starts_with("error[")
+        if (trimmed.starts_with("error: could not compile")
+            || trimmed.starts_with("error["))
+            && !lines.iter().any(|l| l.trim() == trimmed)
         {
-            if !lines.iter().any(|l| l.trim() == trimmed) {
-                lines.push(line.to_string());
-            }
+            lines.push(line.to_string());
         }
     }
 

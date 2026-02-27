@@ -10,7 +10,7 @@ use super::types::FilterConfig;
 /// 3. Embedded stdlib (via `include_dir`)
 ///
 /// First match wins. Most specific command match wins, then highest priority.
-
+///
 /// Resolve a filter for the given command tokens.
 ///
 /// Returns `None` when no filter matches (passthrough behavior).
