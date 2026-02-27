@@ -9,3 +9,4 @@ description = "Agent integration hooks for crux (Claude Code, Codex)"
 crux-core = { path = "../crux-core" }
 anyhow = { workspace = true }
 serde = { workspace = true }
+serde_json = "1"

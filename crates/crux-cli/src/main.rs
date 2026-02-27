@@ -1,21 +1,219 @@
-use clap::Parser;
+use anyhow::Result;
+use clap::{Parser, Subcommand};
+use std::time::Instant;
 
 #[derive(Parser)]
 #[command(name = "crux", version, about = "CLI output compressor for AI agents")]
 struct Cli {
-    /// Command to run and compress
-    #[arg(trailing_var_arg = true)]
-    command: Vec<String>,
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Run a command through the filter pipeline
+    Run {
+        /// Command and arguments to execute
+        #[arg(trailing_var_arg = true, required = true)]
+        command: Vec<String>,
+    },
+    /// Show token savings summary
+    Gain,
+    /// Install Claude Code hook or Codex skill
+    Init {
+        /// Install Claude Code hook globally
+        #[arg(long, group = "target")]
+        global: bool,
+        /// Install Codex skill
+        #[arg(long, group = "target")]
+        codex: bool,
+    },
+    /// List available filters
+    Ls,
+    /// Show which filter matches a command
+    Which {
+        /// Command to check
+        #[arg(trailing_var_arg = true, required = true)]
+        command: Vec<String>,
+    },
+    /// Show filter config details
+    Show {
+        /// Filter name to show
+        filter: String,
+    },
+    /// Export builtin filter as TOML for customization
+    Eject {
+        /// Filter name to eject
+        filter: String,
+    },
+    /// Run declarative filter tests
+    Verify,
 }
 
 fn main() {
     let cli = Cli::parse();
 
-    if cli.command.is_empty() {
-        eprintln!("Usage: crux <command> [args...]");
+    let result = match cli.command {
+        Commands::Run { command } => cmd_run(&command),
+        Commands::Gain => cmd_gain(),
+        Commands::Init { global, codex } => cmd_init(global, codex),
+        Commands::Ls => cmd_stub("ls"),
+        Commands::Which { command } => cmd_which(&command),
+        Commands::Show { filter } => cmd_stub_with_arg("show", &filter),
+        Commands::Eject { filter } => cmd_stub_with_arg("eject", &filter),
+        Commands::Verify => cmd_stub("verify"),
+    };
+
+    if let Err(e) = result {
+        eprintln!("crux: error: {e:#}");
         std::process::exit(1);
     }
+}
 
-    // TODO: resolve filter, execute command, apply filter, output
-    println!("crux: would run {:?}", cli.command);
+/// Run a command through the filter pipeline.
+fn cmd_run(command: &[String]) -> Result<()> {
+    let start = Instant::now();
+
+    // 1. Resolve matching filter
+    let filter = crux_core::config::resolve_filter(command);
+
+    // 2. Execute the command
+    let result = crux_core::runner::run_command(command)?;
+    let raw_output = &result.combined;
+    let input_bytes = raw_output.len();
+
+    // 3. Apply filter (or passthrough)
+    let filtered = if let Some(ref config) = filter {
+        crux_core::filter::apply_filter(config, raw_output, result.exit_code)
+    } else {
+        raw_output.clone()
+    };
+    let output_bytes = filtered.len();
+
+    // 4. Print filtered output
+    print!("{filtered}");
+    // Ensure trailing newline
+    if !filtered.ends_with('\n') && !filtered.is_empty() {
+        println!();
+    }
+
+    // 5. Print exit code if non-zero
+    if result.exit_code != 0 {
+        eprintln!("crux: exit code {}", result.exit_code);
+    }
+
+    // 6. Record tracking event (if feature enabled)
+    #[cfg(feature = "tracking")]
+    {
+        let duration_ms = start.elapsed().as_millis() as u64;
+        if let Err(e) = record_tracking_event(command, &filter, input_bytes, output_bytes, result.exit_code, duration_ms) {
+            eprintln!("crux: tracking error: {e}");
+        }
+    }
+
+    // Suppress unused variable warning when tracking is disabled
+    #[cfg(not(feature = "tracking"))]
+    let _ = start;
+
+    // 7. Print savings summary to stderr
+    if input_bytes > 0 && input_bytes != output_bytes {
+        let saved_pct = ((input_bytes - output_bytes) as f64 / input_bytes as f64) * 100.0;
+        eprintln!(
+            "crux: {input_bytes} → {output_bytes} bytes ({saved_pct:.0}% saved)"
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "tracking")]
+fn record_tracking_event(
+    command: &[String],
+    filter: &Option<crux_core::config::FilterConfig>,
+    input_bytes: usize,
+    output_bytes: usize,
+    exit_code: i32,
+    duration_ms: u64,
+) -> Result<()> {
+    let db_path = crux_tracking::db::default_db_path()?;
+    let conn = crux_tracking::db::open_db(&db_path)?;
+    let event = crux_tracking::events::FilterEvent {
+        command: command.join(" "),
+        filter_name: filter.as_ref().map(|f| f.command.clone()),
+        input_bytes,
+        output_bytes,
+        exit_code,
+        duration_ms: Some(duration_ms),
+    };
+    crux_tracking::events::record_event(&conn, &event)?;
+    Ok(())
+}
+
+/// Show token savings summary.
+fn cmd_gain() -> Result<()> {
+    #[cfg(feature = "tracking")]
+    {
+        let db_path = crux_tracking::db::default_db_path()?;
+        let conn = crux_tracking::db::open_db(&db_path)?;
+        let summary = crux_tracking::events::get_gain_summary(&conn)?;
+
+        if summary.total_events == 0 {
+            println!("No filter events recorded yet. Run some commands through crux first!");
+            return Ok(());
+        }
+
+        println!("crux token savings summary");
+        println!("──────────────────────────");
+        println!("Total events:  {}", summary.total_events);
+        println!("Total input:   {} bytes", summary.total_input_bytes);
+        println!("Total output:  {} bytes", summary.total_output_bytes);
+        println!("Total saved:   {} bytes", summary.total_savings_bytes);
+        println!("Avg savings:   {:.1}%", summary.avg_savings_pct);
+        Ok(())
+    }
+
+    #[cfg(not(feature = "tracking"))]
+    {
+        eprintln!("crux: tracking feature is not enabled");
+        Ok(())
+    }
+}
+
+/// Install hooks/skills.
+fn cmd_init(global: bool, codex: bool) -> Result<()> {
+    if codex {
+        eprintln!("crux init --codex: not yet implemented");
+    } else if global {
+        eprintln!("crux init --global: not yet implemented");
+    } else {
+        eprintln!("crux init: specify --global or --codex");
+    }
+    Ok(())
+}
+
+/// Show which filter matches a command.
+fn cmd_which(command: &[String]) -> Result<()> {
+    match crux_core::config::resolve_filter(command) {
+        Some(config) => {
+            println!("Filter:      {}", config.command);
+            if let Some(desc) = &config.description {
+                println!("Description: {desc}");
+            }
+            println!("Priority:    {}", config.priority);
+        }
+        None => {
+            println!("No filter matches: {}", command.join(" "));
+        }
+    }
+    Ok(())
+}
+
+fn cmd_stub(name: &str) -> Result<()> {
+    eprintln!("crux {name}: not yet implemented");
+    Ok(())
+}
+
+fn cmd_stub_with_arg(name: &str, arg: &str) -> Result<()> {
+    eprintln!("crux {name} {arg}: not yet implemented");
+    Ok(())
 }
