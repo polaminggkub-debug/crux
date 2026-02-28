@@ -177,6 +177,9 @@ fn should_intercept(command: &str) -> bool {
         "ssh ",
         // Build systems
         "make ",
+        // Cloud & deploy
+        "firebase ",
+        "supabase ",
         // Filesystem & utilities
         "ls ",
         "find ",
@@ -186,6 +189,10 @@ fn should_intercept(command: &str) -> bool {
         "curl ",
         "wget ",
         "wc ",
+        "lsof ",
+        "env ",
+        "printenv ",
+        "psql ",
     ];
     known_prefixes.iter().any(|p| command.starts_with(p))
 }

@@ -328,7 +328,7 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
 name = "cruxai-cli"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -343,7 +343,7 @@ dependencies = [
 
 [[package]]
 name = "cruxai-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "criterion",
@@ -359,7 +359,7 @@ dependencies = [
 
 [[package]]
 name = "cruxai-hook"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "cruxai-core",
@@ -369,7 +369,7 @@ dependencies = [
 
 [[package]]
 name = "cruxai-tracking"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "rusqlite",
