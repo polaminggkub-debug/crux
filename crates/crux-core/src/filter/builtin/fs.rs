@@ -279,10 +279,33 @@ pub fn filter_tree(output: &str, _exit_code: i32) -> String {
     out
 }
 
-/// Filter `cat`: if > 200 lines, show first 50 + last 20 + truncation notice.
+/// Filter `cat`: truncate large outputs by byte size or line count.
+/// - If > 50KB: show first 5KB + last 2KB (regardless of line count)
+/// - If > 100 lines: show first 50 + last 20 lines
 pub fn filter_cat(output: &str, _exit_code: i32) -> String {
+    let total_bytes = output.len();
+
+    // Byte-size check first: large payloads (e.g. JSON from MCP tools) with few lines
+    if total_bytes > 51200 {
+        let head_bytes = 5120.min(total_bytes);
+        let tail_bytes = 2048.min(total_bytes);
+
+        // Find a safe UTF-8 boundary for the head
+        let head_end = find_char_boundary(output, head_bytes);
+        let head = &output[..head_end];
+
+        // Find a safe UTF-8 boundary for the tail
+        let tail_start = find_char_boundary_rev(output, total_bytes - tail_bytes);
+        let tail = &output[tail_start..];
+
+        let truncated = total_bytes - head_end - (total_bytes - tail_start);
+        return format!(
+            "{head}\n\n... ({truncated} bytes truncated, {total_bytes} total) ...\n\n{tail}"
+        );
+    }
+
     let lines: Vec<&str> = output.lines().collect();
-    if lines.len() <= 200 {
+    if lines.len() <= 100 {
         return output.to_string();
     }
     let total = lines.len();
@@ -294,6 +317,30 @@ pub fn filter_cat(output: &str, _exit_code: i32) -> String {
     out.push_str(&format!("\n\n... ({truncated} lines truncated) ...\n\n"));
     out.push_str(&tail.join("\n"));
     out
+}
+
+/// Find the nearest char boundary at or before `pos`.
+fn find_char_boundary(s: &str, pos: usize) -> usize {
+    if pos >= s.len() {
+        return s.len();
+    }
+    let mut i = pos;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// Find the nearest char boundary at or after `pos`.
+fn find_char_boundary_rev(s: &str, pos: usize) -> usize {
+    if pos >= s.len() {
+        return s.len();
+    }
+    let mut i = pos;
+    while i < s.len() && !s.is_char_boundary(i) {
+        i += 1;
+    }
+    i
 }
 
 #[cfg(test)]
@@ -633,27 +680,27 @@ drwxr-xr-x@ 3 user  staff  96 Feb  1 10:00 dir_with_xattr
         assert!(result.contains("line 280"));
         assert!(result.contains("line 299"));
         // Middle lines should be omitted
-        assert!(!result.contains("line 100"));
+        assert!(!result.contains("\nline 100\n"));
     }
 
     #[test]
-    fn cat_exactly_200_passthrough() {
-        let lines: Vec<String> = (0..200).map(|i| format!("line {i}")).collect();
+    fn cat_exactly_100_passthrough() {
+        let lines: Vec<String> = (0..100).map(|i| format!("line {i}")).collect();
         let input = lines.join("\n");
         let result = filter_cat(&input, 0);
         assert_eq!(result, input);
     }
 
     #[test]
-    fn cat_201_truncates() {
-        let lines: Vec<String> = (0..201).map(|i| format!("L{i}")).collect();
+    fn cat_101_truncates() {
+        let lines: Vec<String> = (0..101).map(|i| format!("L{i}")).collect();
         let input = lines.join("\n");
         let result = filter_cat(&input, 0);
         assert!(result.contains("L0"));
         assert!(result.contains("L49"));
-        assert!(result.contains("(131 lines truncated)"));
-        assert!(result.contains("L181"));
-        assert!(result.contains("L200"));
+        assert!(result.contains("(31 lines truncated)"));
+        assert!(result.contains("L81"));
+        assert!(result.contains("L100"));
     }
 
     #[test]
@@ -670,5 +717,39 @@ drwxr-xr-x@ 3 user  staff  96 Feb  1 10:00 dir_with_xattr
         assert!(result.contains("x249"));
         // Line 50 should NOT be present
         assert!(!result.contains("\nx50\n"));
+    }
+
+    #[test]
+    fn cat_large_bytes_few_lines() {
+        // 100KB content on 5 lines — should trigger byte-size truncation
+        let chunk = "x".repeat(20_000);
+        let lines: Vec<String> = (0..5).map(|i| format!("LINE{i}:{chunk}")).collect();
+        let input = lines.join("\n");
+        assert!(input.len() > 51200, "Input should be > 50KB");
+
+        let result = filter_cat(&input, 0);
+        assert!(result.contains("bytes truncated"));
+        assert!(result.contains("total"));
+        // Should contain start of first line
+        assert!(result.contains("LINE0:"));
+        // Result should be much smaller than input
+        assert!(result.len() < input.len() / 2);
+    }
+
+    #[test]
+    fn cat_medium_bytes_many_lines() {
+        // 60KB content spread across 80 lines — triggers byte-size truncation
+        // since 60KB > 50KB threshold
+        let chunk = "y".repeat(750);
+        let lines: Vec<String> = (0..80).map(|i| format!("row{i}:{chunk}")).collect();
+        let input = lines.join("\n");
+        assert!(input.len() > 51200, "Input should be > 50KB");
+
+        let result = filter_cat(&input, 0);
+        assert!(
+            result.contains("bytes truncated"),
+            "Should byte-truncate since > 50KB"
+        );
+        assert!(result.len() < input.len());
     }
 }

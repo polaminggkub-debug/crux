@@ -22,7 +22,8 @@ pub fn register(m: &mut HashMap<&'static str, BuiltinFilterFn>) {
     m.insert("docker exec", filter_docker_exec as BuiltinFilterFn);
 }
 
-/// Filter docker ps: keep header + container lines, strip PORTS column, show NAME, STATUS, IMAGE.
+/// Filter docker ps: keep header + container lines, strip PORTS/CONTAINER ID/CREATED columns.
+/// Keeps: IMAGE, COMMAND, STATUS, NAMES (the useful columns for AI agents).
 pub fn filter_docker_ps(output: &str, _exit_code: i32) -> String {
     let lines: Vec<&str> = output.lines().collect();
     if lines.is_empty() {
@@ -32,14 +33,24 @@ pub fn filter_docker_ps(output: &str, _exit_code: i32) -> String {
     let header = lines[0];
     let col_positions = parse_column_positions(header);
 
-    // Find PORTS column to strip
-    let ports_idx = col_positions.iter().position(|c| c.name == "PORTS");
+    // Find columns to strip (PORTS, CONTAINER ID, CREATED are noise for AI agents)
+    let strip_cols: Vec<usize> = col_positions
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| {
+            matches!(
+                c.name.as_str(),
+                "PORTS" | "CONTAINER ID" | "CREATED"
+            )
+        })
+        .map(|(i, _)| i)
+        .collect();
 
     let mut result = Vec::new();
 
     for (i, line) in lines.iter().enumerate() {
         if i == 0 {
-            let filtered = strip_column(line, &col_positions, ports_idx);
+            let filtered = strip_columns(line, &col_positions, &strip_cols);
             result.push(filtered);
             continue;
         }
@@ -49,7 +60,7 @@ pub fn filter_docker_ps(output: &str, _exit_code: i32) -> String {
             continue;
         }
 
-        let filtered = strip_column(line, &col_positions, ports_idx);
+        let filtered = strip_columns(line, &col_positions, &strip_cols);
         result.push(filtered);
     }
 
@@ -490,7 +501,7 @@ fn parse_column_positions(header: &str) -> Vec<ColumnDef> {
     cols
 }
 
-/// Remove a column from a line by its index in col_positions.
+/// Remove a single column from a line by its index in col_positions.
 fn strip_column(line: &str, cols: &[ColumnDef], strip_idx: Option<usize>) -> String {
     let strip_idx = match strip_idx {
         Some(idx) => idx,
@@ -524,6 +535,40 @@ fn strip_column(line: &str, cols: &[ColumnDef], strip_idx: Option<usize>) -> Str
         .to_string()
 }
 
+/// Remove multiple columns from a line. Processes right-to-left to avoid index shifting.
+fn strip_columns(line: &str, cols: &[ColumnDef], strip_indices: &[usize]) -> String {
+    if strip_indices.is_empty() {
+        return line.to_string();
+    }
+
+    // Sort indices in reverse order to strip from right to left
+    let mut sorted = strip_indices.to_vec();
+    sorted.sort_unstable_by(|a, b| b.cmp(a));
+
+    let mut result = line.to_string();
+    let line_len = line.len();
+
+    for &idx in &sorted {
+        if idx >= cols.len() {
+            continue;
+        }
+        let col = &cols[idx];
+        if col.start >= result.len() {
+            continue;
+        }
+        let end = if col.end < line_len { col.end } else { result.len() };
+        let end = end.min(result.len());
+        result = format!("{}{}", &result[..col.start], &result[end..]);
+    }
+
+    // Collapse excessive spaces but keep at least 3 between columns
+    let collapse_re = Regex::new(r" {4,}").unwrap();
+    collapse_re
+        .replace_all(&result, "   ")
+        .trim_end()
+        .to_string()
+}
+
 /// Strip timestamp prefix from a log line.
 fn strip_timestamp(line: &str, re: &Regex) -> String {
     re.replace(line, "").to_string()
@@ -536,21 +581,65 @@ mod tests {
     // -- docker ps tests --
 
     #[test]
-    fn docker_ps_strips_ports_column() {
+    fn docker_ps_strips_noise_columns() {
         let input = "\
 CONTAINER ID   IMAGE          COMMAND       CREATED        STATUS        PORTS                  NAMES
 abc123def456   nginx:latest   \"nginx -g\"    2 hours ago    Up 2 hours    0.0.0.0:80->80/tcp     web
 def789abc012   redis:7        \"redis-ser\"   3 hours ago    Up 3 hours    0.0.0.0:6379->6379/tcp cache";
 
         let result = filter_docker_ps(input, 0);
+        // PORTS stripped
         assert!(!result.contains("0.0.0.0:80"), "Should strip PORTS data");
         assert!(!result.contains("6379"), "Should strip PORTS data");
+        assert!(!result.contains("PORTS"));
+        // CONTAINER ID stripped
+        assert!(
+            !result.contains("abc123def456"),
+            "Should strip CONTAINER ID data"
+        );
+        assert!(
+            !result.contains("def789abc012"),
+            "Should strip CONTAINER ID data"
+        );
+        assert!(!result.contains("CONTAINER ID"));
+        // CREATED stripped
+        assert!(
+            !result.contains("2 hours ago"),
+            "Should strip CREATED data"
+        );
+        assert!(
+            !result.contains("3 hours ago"),
+            "Should strip CREATED data"
+        );
+        assert!(!result.contains("CREATED"));
+        // Useful columns kept
         assert!(result.contains("nginx:latest"));
         assert!(result.contains("web"));
         assert!(result.contains("redis:7"));
         assert!(result.contains("cache"));
         assert!(result.contains("NAMES"));
-        assert!(!result.contains("PORTS"));
+        assert!(result.contains("IMAGE"));
+        assert!(result.contains("STATUS"));
+    }
+
+    #[test]
+    fn docker_ps_compact_output_format() {
+        let input = "\
+CONTAINER ID   IMAGE          COMMAND       CREATED        STATUS        PORTS                  NAMES
+abc123def456   nginx:latest   \"nginx -g\"    2 hours ago    Up 2 hours    0.0.0.0:80->80/tcp     web";
+
+        let result = filter_docker_ps(input, 0);
+        let lines: Vec<&str> = result.lines().collect();
+        assert_eq!(lines.len(), 2, "Should have header + 1 data line");
+        // Header should only have kept columns
+        assert!(lines[0].contains("IMAGE"));
+        assert!(lines[0].contains("COMMAND"));
+        assert!(lines[0].contains("STATUS"));
+        assert!(lines[0].contains("NAMES"));
+        // Data line should have the useful info
+        assert!(lines[1].contains("nginx:latest"));
+        assert!(lines[1].contains("Up 2 hours"));
+        assert!(lines[1].contains("web"));
     }
 
     #[test]
@@ -575,6 +664,10 @@ abc123def456   myapp:v2       \"./start\"     5 min ago      Up 5 minutes    808
         let result = filter_docker_ps(input, 0);
         assert!(result.contains("Up 5 minutes"));
         assert!(result.contains("STATUS"));
+        // Noise columns should be stripped
+        assert!(!result.contains("abc123def456"));
+        assert!(!result.contains("5 min ago"));
+        assert!(!result.contains("8080/tcp"));
     }
 
     // -- docker images tests --

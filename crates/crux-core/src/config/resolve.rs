@@ -71,7 +71,68 @@ pub fn resolve_filter(command: &[String]) -> Option<FilterConfig> {
         }
     }
 
+    // Strip shell wrapper (bash -c, sh -c) and retry
+    if command.len() >= 3 {
+        let shell = command[0].as_str();
+        if matches!(shell, "bash" | "sh") && command[1] == "-c" {
+            let inner_cmd = if command.len() == 3 {
+                command[2].clone()
+            } else {
+                command[2..].join(" ")
+            };
+            let cleaned = strip_shell_noise(&inner_cmd);
+            let inner_tokens: Vec<String> =
+                cleaned.split_whitespace().map(|s| s.to_string()).collect();
+            if !inner_tokens.is_empty() {
+                return resolve_filter(&inner_tokens);
+            }
+        }
+    }
+
     None
+}
+
+/// Strip shell noise from a command string passed to `bash -c` / `sh -c`.
+///
+/// Removes surrounding quotes and trailing shell redirections/pipes that
+/// prevent filter matching (e.g. `2>&1`, `| head -200`).
+fn strip_shell_noise(cmd: &str) -> String {
+    let mut s = cmd.trim();
+
+    // Strip surrounding quotes
+    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
+        s = &s[1..s.len() - 1];
+        s = s.trim();
+    }
+
+    let mut result = s.to_string();
+
+    // Repeatedly strip trailing pipe expressions and redirections
+    loop {
+        let before = result.clone();
+
+        // Remove trailing pipe segments: | head -200, | tail -n 100, | grep ...
+        if let Some(pipe_pos) = result.rfind('|') {
+            let after_pipe = result[pipe_pos + 1..].trim();
+            let pipe_cmd = after_pipe.split_whitespace().next().unwrap_or("");
+            if matches!(pipe_cmd, "head" | "tail" | "grep" | "sort" | "wc" | "less" | "more") {
+                result = result[..pipe_pos].trim_end().to_string();
+            }
+        }
+
+        // Remove trailing redirections: 2>&1, 2>/dev/null, >/dev/null, etc.
+        for pattern in &["2>&1", "2>/dev/null", ">/dev/null", "&>/dev/null"] {
+            if result.ends_with(pattern) {
+                result = result[..result.len() - pattern.len()].trim_end().to_string();
+            }
+        }
+
+        if result == before {
+            break;
+        }
+    }
+
+    result
 }
 
 /// Build the full command string from tokens for matching.
@@ -362,5 +423,76 @@ mod tests {
     fn match_score_no_colon_partial() {
         // "npm run tes" should NOT match "npm run test:unit"
         assert!(match_score("npm run tes", "npm run test:unit").is_none());
+    }
+
+    #[test]
+    fn strip_shell_noise_removes_quotes_and_redirections() {
+        assert_eq!(strip_shell_noise("\"git status\""), "git status");
+        assert_eq!(strip_shell_noise("'git status'"), "git status");
+        assert_eq!(strip_shell_noise("docker ps 2>&1"), "docker ps");
+        assert_eq!(
+            strip_shell_noise("\"npm ls --depth=0 2>&1\""),
+            "npm ls --depth=0"
+        );
+        assert_eq!(
+            strip_shell_noise("\"npx vitest run 2>&1 | head -200\""),
+            "npx vitest run"
+        );
+        assert_eq!(strip_shell_noise("git status"), "git status");
+    }
+
+    #[test]
+    fn bash_c_git_status_resolves() {
+        let cmd: Vec<String> = vec!["bash", "-c", "git status"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let result = resolve_filter(&cmd);
+        assert!(result.is_some(), "bash -c 'git status' should resolve");
+        assert_eq!(result.unwrap().command, "git status");
+    }
+
+    #[test]
+    fn bash_c_with_quotes_and_redirection() {
+        let cmd: Vec<String> = vec!["bash", "-c", "\"docker ps 2>&1\""]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let result = resolve_filter(&cmd);
+        assert!(result.is_some(), "bash -c 'docker ps 2>&1' should resolve");
+    }
+
+    #[test]
+    fn bash_c_npx_stripping() {
+        // bash -c "npx vite build 2>&1" should strip bash -c, then npx
+        let cmd: Vec<String> = vec!["bash", "-c", "'npx vite build 2>&1'"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let result = resolve_filter(&cmd);
+        assert!(
+            result.is_some(),
+            "bash -c 'npx vite build 2>&1' should resolve via npx stripping"
+        );
+    }
+
+    #[test]
+    fn sh_c_resolves() {
+        let cmd: Vec<String> = vec!["sh", "-c", "ls -la"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let result = resolve_filter(&cmd);
+        assert!(result.is_some(), "sh -c 'ls -la' should resolve");
+    }
+
+    #[test]
+    fn bash_c_no_filter_returns_none() {
+        let cmd: Vec<String> = vec!["bash", "-c", "echo hello"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let result = resolve_filter(&cmd);
+        assert!(result.is_none(), "echo has no filter, should return None");
     }
 }
