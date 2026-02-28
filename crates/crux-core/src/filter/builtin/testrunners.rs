@@ -8,6 +8,7 @@ use super::BuiltinFilterFn;
 pub fn register(m: &mut HashMap<&'static str, BuiltinFilterFn>) {
     m.insert("pytest", filter_pytest as BuiltinFilterFn);
     m.insert("vitest", filter_vitest as BuiltinFilterFn);
+    m.insert("vitest run", filter_vitest as BuiltinFilterFn);
     m.insert("jest", filter_jest as BuiltinFilterFn);
     m.insert("go test", filter_go_test as BuiltinFilterFn);
     m.insert("playwright test", filter_playwright as BuiltinFilterFn);
@@ -85,25 +86,97 @@ pub fn filter_pytest(output: &str, exit_code: i32) -> String {
     parts.join("\n")
 }
 
+/// Return true if a coverage table row has any percentage value below 80.
+/// Expects pipe-separated columns like "  app.ts  |  75.00  |  64.30  |  80.00  |  75.00  |"
+fn is_low_coverage_line(line: &str) -> bool {
+    let pct_re = Regex::new(r"\b(\d{1,3}(?:\.\d+)?)\s*\|").unwrap();
+    let mut found_any = false;
+    for cap in pct_re.captures_iter(line) {
+        if let Ok(v) = cap[1].parse::<f64>() {
+            found_any = true;
+            if v < 80.0 {
+                return true;
+            }
+        }
+    }
+    // If no percentages parsed, keep the line (border / header / non-data row)
+    !found_any
+}
+
+/// Filter the coverage table section from vitest --coverage output.
+/// Keeps: header row, "All files" summary row, low-coverage file rows, border lines.
+/// Drops: high-coverage per-file rows. Appends a count of omitted files.
+fn filter_coverage_section(lines: &[&str]) -> Vec<String> {
+    let border_re = Regex::new(r"^-{3,}").unwrap();
+    let header_re = Regex::new(r"%\s*Stmts|%\s*Branch").unwrap();
+    let all_files_re = Regex::new(r"(?i)^\s*\|\s*All files\b|^All files\b").unwrap();
+
+    let mut out = Vec::new();
+    let mut dropped = 0u32;
+
+    for line in lines {
+        let trimmed = line.trim();
+        // Always keep borders and header
+        if border_re.is_match(trimmed) || header_re.is_match(trimmed) {
+            out.push(trimmed.to_string());
+            continue;
+        }
+        // Always keep "All files" summary row
+        if all_files_re.is_match(trimmed) {
+            out.push(trimmed.to_string());
+            continue;
+        }
+        // Keep rows that are file rows with low coverage; drop the rest
+        if trimmed.contains('|') {
+            if is_low_coverage_line(trimmed) {
+                out.push(trimmed.to_string());
+            } else {
+                dropped += 1;
+            }
+        } else {
+            out.push(trimmed.to_string());
+        }
+    }
+
+    if dropped > 0 {
+        out.push(format!("{dropped} files with >80% coverage omitted"));
+    }
+    out
+}
+
 /// Filter vitest output: keep "Tests N" summary and test file results. On failure keep
 /// failing test names and error messages. Drop timestamps and progress indicators.
+/// When --coverage output is present, compress the coverage table.
 pub fn filter_vitest(output: &str, exit_code: i32) -> String {
     let summary_re = Regex::new(r"^\s*Tests\s+\d+").unwrap();
     let file_result_re = Regex::new(r"^\s*(PASS|FAIL|SKIP)\s+").unwrap();
     let duration_re = Regex::new(r"^\s*Duration\s+").unwrap();
     let progress_re = Regex::new(r"^\s*\[[\d/]+\]").unwrap();
     let timestamp_re = Regex::new(r"^\s*\d{2}:\d{2}:\d{2}").unwrap();
+    let coverage_start_re = Regex::new(r"Coverage report|%\s*Stmts|%\s*Branch|^\s*-{3,}").unwrap();
 
     let mut summary_lines = Vec::new();
     let mut file_lines = Vec::new();
     let mut failure_lines = Vec::new();
+    let mut coverage_lines: Vec<&str> = Vec::new();
     let mut in_failure = false;
+    let mut in_coverage = false;
 
     for line in output.lines() {
         let trimmed = line.trim();
 
         // Drop progress indicators and timestamps
         if progress_re.is_match(trimmed) || timestamp_re.is_match(trimmed) {
+            continue;
+        }
+
+        // Detect start of coverage section
+        if !in_coverage && coverage_start_re.is_match(trimmed) {
+            in_coverage = true;
+        }
+
+        if in_coverage {
+            coverage_lines.push(line);
             continue;
         }
 
@@ -166,6 +239,16 @@ pub fn filter_vitest(output: &str, exit_code: i32) -> String {
         }
         for line in &summary_lines {
             parts.push(line.clone());
+        }
+    }
+
+    // Append compressed coverage section
+    if !coverage_lines.is_empty() {
+        if !parts.is_empty() {
+            parts.push(String::new());
+        }
+        for line in filter_coverage_section(&coverage_lines) {
+            parts.push(line);
         }
     }
 
@@ -586,6 +669,81 @@ FAILED tests/test_math.py::test_add - AssertionError: assert 3 == 4
     fn vitest_empty_output() {
         let result = filter_vitest("", 0);
         assert_eq!(result, "All tests passed.");
+    }
+
+    #[test]
+    fn vitest_coverage_keeps_summary() {
+        let input = "\
+----------|---------|----------|---------|---------|---
+File      | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
+----------|---------|----------|---------|---------|---
+All files |   85.23 |    72.15 |   90.00 |   85.23 |
+----------|---------|----------|---------|---------|---";
+
+        let lines: Vec<&str> = input.lines().collect();
+        let result = filter_coverage_section(&lines);
+        assert!(result.iter().any(|l| l.contains("All files")));
+    }
+
+    #[test]
+    fn vitest_coverage_drops_high_coverage() {
+        let input = "\
+----------|---------|----------|---------|---------|---
+File      | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
+----------|---------|----------|---------|---------|---
+All files |   95.00 |    92.00 |   98.00 |   95.00 |
+ src/app.ts |   95.00 |    92.00 |  100.00 |   95.00 |
+ src/lib.ts |   98.00 |    95.00 |  100.00 |   98.00 |
+----------|---------|----------|---------|---------|---";
+
+        let lines: Vec<&str> = input.lines().collect();
+        let result = filter_coverage_section(&lines);
+        let joined = result.join("\n");
+        assert!(joined.contains("omitted"));
+        assert!(!joined.contains("src/app.ts"));
+        assert!(!joined.contains("src/lib.ts"));
+    }
+
+    #[test]
+    fn vitest_coverage_keeps_low_coverage() {
+        let input = "\
+----------|---------|----------|---------|---------|---
+File      | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
+----------|---------|----------|---------|---------|---
+All files |   75.00 |    64.30 |   80.00 |   75.00 |
+ src/utils.ts |   75.00 |    64.30 |   80.00 |   75.00 | 5,20-25
+ src/app.ts   |   95.00 |    90.00 |  100.00 |   95.00 |
+----------|---------|----------|---------|---------|---";
+
+        let lines: Vec<&str> = input.lines().collect();
+        let result = filter_coverage_section(&lines);
+        let joined = result.join("\n");
+        assert!(joined.contains("src/utils.ts"));
+        assert!(!joined.contains("src/app.ts"));
+    }
+
+    #[test]
+    fn vitest_with_coverage_and_results() {
+        let input = "\
+ PASS  src/utils.test.ts
+ PASS  src/api.test.ts
+
+ Tests  6 passed (6)
+ Duration  1.23s
+
+----------|---------|----------|---------|---------|---
+File      | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
+----------|---------|----------|---------|---------|---
+All files |   75.00 |    64.30 |   80.00 |   75.00 |
+ src/utils.ts |   75.00 |    64.30 |   80.00 |   75.00 | 5,20-25
+ src/app.ts   |   95.00 |    90.00 |  100.00 |   95.00 |
+----------|---------|----------|---------|---------|---";
+
+        let result = filter_vitest(input, 0);
+        assert!(result.contains("PASS  src/utils.test.ts"));
+        assert!(result.contains("Tests  6 passed (6)"));
+        assert!(result.contains("All files"));
+        assert!(result.contains("src/utils.ts"));
     }
 
     // -- jest --

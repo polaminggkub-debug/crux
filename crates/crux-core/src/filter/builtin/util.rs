@@ -9,6 +9,8 @@ pub fn register(m: &mut HashMap<&'static str, BuiltinFilterFn>) {
     m.insert("wc", filter_wc as BuiltinFilterFn);
     m.insert("env", filter_env as BuiltinFilterFn);
     m.insert("printenv", filter_env as BuiltinFilterFn);
+    m.insert("lsof", filter_lsof as BuiltinFilterFn);
+    m.insert("psql", filter_psql as BuiltinFilterFn);
 }
 
 /// Filter curl output: strip progress bars and download stats.
@@ -203,6 +205,149 @@ pub fn filter_env(output: &str, exit_code: i32) -> String {
     }
 }
 
+/// Filter lsof output: keep header line, strip all columns except COMMAND, PID, and NAME.
+/// lsof is wide tabular data; reducing to 3 columns cuts ~80+ chars per line to ~30.
+/// On empty output returns "No matching processes."
+/// Uses whitespace splitting: field[0]=COMMAND, field[1]=PID, field[8..]=NAME (may contain spaces).
+pub fn filter_lsof(output: &str, _exit_code: i32) -> String {
+    let lines: Vec<&str> = output.lines().collect();
+    if lines.is_empty() {
+        return "No matching processes.".to_string();
+    }
+
+    // Verify first line looks like an lsof header.
+    let header = lines[0].trim();
+    let has_lsof_header =
+        header.contains("COMMAND") && header.contains("PID") && header.contains("NAME");
+    if !has_lsof_header {
+        return output.to_string();
+    }
+
+    let mut result = Vec::with_capacity(lines.len());
+    // Output a compact header.
+    result.push("COMMAND  PID  NAME".to_string());
+
+    for line in lines.iter().skip(1) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        // lsof fields: COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME...
+        // NAME is always the last field and may contain spaces (e.g., "*:5174 (LISTEN)").
+        let fields: Vec<&str> = line
+            .splitn(10, char::is_whitespace)
+            .filter(|f| !f.is_empty())
+            .collect();
+        if fields.len() < 2 {
+            continue;
+        }
+        let command = fields[0];
+        let pid = fields[1];
+        // NAME is everything from field index 8 onwards (9th whitespace-separated token).
+        // If the line has fewer than 9 fields, take the last available field.
+        let name = if fields.len() >= 9 {
+            // Re-split without limit to get remaining fields joined.
+            let all: Vec<&str> = line.split_whitespace().collect();
+            all[8..].join(" ")
+        } else {
+            fields.last().unwrap_or(&"").to_string()
+        };
+        result.push(format!("{command}  {pid}  {name}"));
+    }
+
+    if result.len() <= 1 {
+        "No matching processes.".to_string()
+    } else {
+        result.join("\n")
+    }
+}
+
+/// Filter psql output.
+///
+/// - **Tabular output** (lines containing `---+---` or `+---` borders): strip border rows,
+///   keep header + data rows. If > 50 data rows, show first 20 + last 10 + count.
+/// - **Row count** lines like "(3 rows)": always keep.
+/// - **Error/FATAL/psql:/NOTICE/WARNING** lines: always keep.
+/// - Non-tabular: pass through but truncate > 100 lines (head 50 + tail 20).
+pub fn filter_psql(output: &str, _exit_code: i32) -> String {
+    if output.trim().is_empty() {
+        return "No output.".to_string();
+    }
+
+    let lines: Vec<&str> = output.lines().collect();
+
+    // Detect tabular output: any line that looks like a border (`---+---` or `+---+`).
+    let is_border = |line: &str| {
+        let t = line.trim();
+        (t.contains("---") && t.contains('+')) || t.chars().all(|c| c == '-' || c == '+')
+    };
+
+    let is_always_keep = |line: &str| {
+        let t = line.trim();
+        t.starts_with("ERROR:")
+            || t.starts_with("FATAL:")
+            || t.starts_with("psql:")
+            || t.starts_with("NOTICE:")
+            || t.starts_with("WARNING:")
+            || (t.starts_with('(') && t.ends_with("rows)"))
+            || (t.starts_with('(') && t.ends_with("row)"))
+    };
+
+    let has_table = lines.iter().any(|l| is_border(l));
+
+    if has_table {
+        let mut kept: Vec<String> = Vec::new();
+        let mut data_rows: Vec<String> = Vec::new();
+        let mut header_done = false;
+
+        for line in &lines {
+            if is_always_keep(line) {
+                kept.push(line.trim().to_string());
+                continue;
+            }
+            if is_border(line) {
+                if !header_done {
+                    header_done = true; // separator after column headers
+                }
+                continue; // drop border rows
+            }
+            if !header_done {
+                // Column header row(s) — always keep
+                kept.push(line.trim().to_string());
+            } else {
+                data_rows.push(line.trim().to_string());
+            }
+        }
+
+        let total_data = data_rows.len();
+        if total_data > 50 {
+            let omitted = total_data - 20 - 10;
+            let mut shown = data_rows[..20].to_vec();
+            shown.push(format!("... ({omitted} rows omitted, {total_data} total)"));
+            shown.extend_from_slice(&data_rows[total_data - 10..]);
+            kept.extend(shown);
+        } else {
+            kept.extend(data_rows);
+        }
+
+        return kept.join("\n");
+    }
+
+    // Non-tabular: pass through, truncate if > 100 lines.
+    if lines.len() <= 100 {
+        return output.to_string();
+    }
+
+    let total = lines.len();
+    let mut result: Vec<String> = lines[..50].iter().map(|l| l.to_string()).collect();
+    result.push(format!(
+        "... ({} lines omitted, {} total)",
+        total - 50 - 20,
+        total
+    ));
+    result.extend(lines[total - 20..].iter().map(|l| l.to_string()));
+    result.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,5 +510,79 @@ mod tests {
         assert!(result.contains("(55 lines of output)"));
         assert!(result.contains("file0.txt"));
         assert!(result.contains("..."));
+    }
+
+    // -- lsof tests --
+
+    #[test]
+    fn lsof_strips_columns() {
+        let input = "COMMAND   PID   USER   FD   TYPE   DEVICE   SIZE/OFF   NODE   NAME\nnode     1234   user   22u  IPv4   0x1234   0t0        TCP    *:5174 (LISTEN)";
+        let result = filter_lsof(input, 0);
+        // Must keep COMMAND and PID and NAME
+        assert!(result.contains("COMMAND"));
+        assert!(result.contains("NAME"));
+        assert!(result.contains("node"));
+        assert!(result.contains("1234"));
+        assert!(result.contains("*:5174 (LISTEN)"));
+        // Must not contain intermediate columns
+        assert!(!result.contains("USER"));
+        assert!(!result.contains("DEVICE"));
+        assert!(!result.contains("SIZE/OFF"));
+    }
+
+    #[test]
+    fn lsof_empty() {
+        let result = filter_lsof("", 0);
+        assert_eq!(result, "No matching processes.");
+    }
+
+    // -- psql tests --
+
+    #[test]
+    fn psql_strips_borders() {
+        let input = " Schema |  Name   | Type  | Owner\n--------+---------+-------+----------\n public | users   | table | postgres\n public | orders  | table | postgres\n(2 rows)";
+        let result = filter_psql(input, 0);
+        assert!(!result.contains("--------"));
+        assert!(result.contains("Schema"));
+        assert!(result.contains("users"));
+        assert!(result.contains("orders"));
+    }
+
+    #[test]
+    fn psql_keeps_row_count() {
+        let input = " id | name\n----+------\n  1 | Alice\n  2 | Bob\n  3 | Carol\n(3 rows)";
+        let result = filter_psql(input, 0);
+        assert!(result.contains("(3 rows)"));
+    }
+
+    #[test]
+    fn psql_keeps_errors() {
+        let input = "ERROR:  relation \"missing_table\" does not exist\nLINE 1: SELECT * FROM missing_table;\n                      ^";
+        let result = filter_psql(input, 1);
+        assert!(result.contains("ERROR:"));
+        assert!(result.contains("missing_table"));
+    }
+
+    #[test]
+    fn psql_truncates_long() {
+        // Build a table with 60 data rows
+        let mut lines = vec![" id | value".to_string(), "----+-------".to_string()];
+        for i in 0..60 {
+            lines.push(format!("  {i} | val{i}"));
+        }
+        lines.push("(60 rows)".to_string());
+        let input = lines.join("\n");
+
+        let result = filter_psql(&input, 0);
+        // Should have omission marker
+        assert!(result.contains("omitted"));
+        // Should keep the row count
+        assert!(result.contains("(60 rows)"));
+        // Should not contain all 60 rows verbatim
+        let data_line_count = result.lines().filter(|l| l.contains("val")).count();
+        assert!(
+            data_line_count < 60,
+            "Expected truncation, got {data_line_count} data lines"
+        );
     }
 }

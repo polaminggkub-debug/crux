@@ -18,6 +18,8 @@ pub fn register(m: &mut HashMap<&'static str, BuiltinFilterFn>) {
         "docker-compose logs",
         filter_docker_compose_logs as BuiltinFilterFn,
     );
+    m.insert("docker build", filter_docker_build as BuiltinFilterFn);
+    m.insert("docker exec", filter_docker_exec as BuiltinFilterFn);
 }
 
 /// Filter docker ps: keep header + container lines, strip PORTS column, show NAME, STATUS, IMAGE.
@@ -266,6 +268,152 @@ fn dedupe_container_prefixes(
         }
     }
     result
+}
+
+/// Filter docker build: drop layer/pull progress, keep success/error/warn lines.
+/// Summarizes cached steps; truncates to 30 lines max.
+pub fn filter_docker_build(output: &str, exit_code: i32) -> String {
+    if output.trim().is_empty() {
+        return if exit_code != 0 {
+            format!("docker build failed (exit code {exit_code}).")
+        } else {
+            "Build completed successfully.".to_string()
+        };
+    }
+
+    let layer_re = Regex::new(
+        r"(?x)
+        ^\s*(\[[\d/]+\]\ |=>\ |\#\d+\ \[|Step\ \d+/\d+\ :|
+        sha256:|Downloading|Extracting|Pull\ complete|Digest:|Status:\ Download)
+        ",
+    )
+    .unwrap();
+    let buildkit_error_re = Regex::new(r"^\s*#\d+\s+ERROR").unwrap();
+    let success_re =
+        Regex::new(r"(?i)(Successfully\ (built|tagged)|exporting\ to\ image)").unwrap();
+    let error_re = Regex::new(r"(?i)^(ERROR|error|failed\ to)").unwrap();
+    let buildkit_step_re = Regex::new(r"^\s*#\d+\s+\[").unwrap();
+
+    let mut kept = Vec::new();
+    let mut cached_count = 0usize;
+    let mut executed_count = 0usize;
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Count CACHED vs executed BuildKit steps for summary
+        if trimmed.contains("CACHED") {
+            cached_count += 1;
+            continue;
+        }
+        if buildkit_step_re.is_match(trimmed) {
+            executed_count += 1;
+            continue;
+        }
+
+        // Always keep
+        if buildkit_error_re.is_match(trimmed)
+            || success_re.is_match(trimmed)
+            || trimmed.starts_with("WARN")
+            || error_re.is_match(trimmed)
+        {
+            kept.push(trimmed.to_string());
+            continue;
+        }
+
+        // Drop layer/progress noise
+        if layer_re.is_match(trimmed) {
+            continue;
+        }
+
+        kept.push(trimmed.to_string());
+    }
+
+    let mut result = Vec::new();
+
+    if cached_count > 0 || executed_count > 0 {
+        result.push(format!(
+            "{cached_count} cached, {executed_count} executed steps"
+        ));
+    }
+
+    let limit = 30usize;
+    if kept.len() > limit {
+        let omitted = kept.len() - limit;
+        result.extend_from_slice(&kept[..limit]);
+        result.push(format!("...{omitted} lines omitted..."));
+    } else {
+        result.extend(kept);
+    }
+
+    if result.is_empty() {
+        if exit_code != 0 {
+            format!("docker build failed (exit code {exit_code}).")
+        } else {
+            "Build completed successfully.".to_string()
+        }
+    } else {
+        result.join("\n")
+    }
+}
+
+/// Filter docker exec: for psql tabular output strip border lines; for plain text
+/// truncate > 100 lines (head 50 + tail 20). On error, pass through.
+pub fn filter_docker_exec(output: &str, exit_code: i32) -> String {
+    if output.trim().is_empty() {
+        return "No output.".to_string();
+    }
+    if exit_code != 0 {
+        return output.to_string();
+    }
+
+    let border_re = Regex::new(r"^[-+|]+$").unwrap();
+    let is_psql = output.lines().any(|l| {
+        let t = l.trim();
+        t.contains("---+---")
+            || t.contains("-+-")
+            || (t.starts_with('+') && t.ends_with('+') && t.contains('-'))
+    });
+
+    if is_psql {
+        let rows: Vec<&str> = output
+            .lines()
+            .filter(|l| !border_re.is_match(l.trim()))
+            .collect();
+
+        let limit = 50usize;
+        if rows.len() > limit {
+            let omitted = rows.len() - limit;
+            let result: Vec<&str> = rows[..limit].to_vec();
+            let msg = format!("...{omitted} rows omitted...");
+            let mut out = result.join("\n");
+            out.push('\n');
+            out.push_str(&msg);
+            return out;
+        }
+
+        return rows.join("\n");
+    }
+
+    let lines: Vec<&str> = output.lines().collect();
+    let total = lines.len();
+
+    if total <= 100 {
+        return output.to_string();
+    }
+
+    let head = &lines[..50];
+    let tail = &lines[total - 20..];
+    let omitted = total - 50 - 20;
+    let mut out = head.join("\n");
+    out.push('\n');
+    out.push_str(&format!("...{omitted} lines omitted..."));
+    out.push('\n');
+    out.push_str(&tail.join("\n"));
+    out
 }
 
 // -- helpers --
@@ -691,5 +839,140 @@ web-1  | Request 2";
         assert!(lines[0].contains("web-1"));
         assert!(lines[1].contains("db-1"));
         assert!(lines[2].contains("web-1"));
+    }
+
+    // -- docker build tests --
+
+    #[test]
+    fn docker_build_success_tagged() {
+        let input = "\
+#1 [internal] load build definition from Dockerfile
+#1 DONE 0.0s
+#2 [1/3] FROM docker.io/library/node:18
+#2 CACHED
+#3 [2/3] WORKDIR /app
+#3 DONE 0.1s
+#4 [3/3] COPY . .
+#4 DONE 0.2s
+#5 exporting to image
+#5 DONE 0.3s
+Successfully built abc123def456
+Successfully tagged myapp:latest";
+
+        let result = filter_docker_build(input, 0);
+        assert!(result.contains("Successfully tagged myapp:latest"));
+        assert!(result.contains("Successfully built abc123def456"));
+        assert!(!result.contains("WORKDIR"));
+        assert!(!result.contains("COPY . ."));
+    }
+
+    #[test]
+    fn docker_build_drops_layer_progress() {
+        let input = "\
+sha256:abc123: Downloading [==>  ] 10.2MB/50.3MB
+sha256:def456: Extracting [=====>] 20.1MB/20.1MB
+sha256:abc123: Pull complete
+Digest: sha256:abcdef123456
+Status: Downloaded newer image for node:18
+Step 1/5 : FROM node:18
+ ---> abc123def456
+Step 2/5 : WORKDIR /app
+Successfully built deadbeef0000";
+
+        let result = filter_docker_build(input, 0);
+        assert!(
+            !result.contains("Downloading"),
+            "Should drop download lines"
+        );
+        assert!(!result.contains("Extracting"), "Should drop extract lines");
+        assert!(!result.contains("sha256:"), "Should drop sha256 lines");
+        assert!(
+            !result.contains("Pull complete"),
+            "Should drop pull progress"
+        );
+        assert!(result.contains("Successfully built deadbeef0000"));
+    }
+
+    #[test]
+    fn docker_build_keeps_errors() {
+        let input = "\
+#1 [internal] load build definition from Dockerfile
+#1 DONE 0.0s
+#2 [1/3] FROM docker.io/library/node:18
+#3 [2/3] RUN npm install
+#3 ERROR: npm ERR! Cannot resolve dependency
+ERROR [3/3] RUN npm install 1.23s
+error: failed to solve: process did not complete successfully";
+
+        let result = filter_docker_build(input, 1);
+        assert!(result.contains("ERROR"));
+        assert!(result.contains("error: failed to solve"));
+        assert!(!result.contains("[internal] load build definition"));
+    }
+
+    #[test]
+    fn docker_build_empty_success() {
+        let result = filter_docker_build("", 0);
+        assert_eq!(result, "Build completed successfully.");
+    }
+
+    // -- docker exec tests --
+
+    #[test]
+    fn docker_exec_truncates_long_output() {
+        let mut lines = Vec::new();
+        for i in 0..130 {
+            lines.push(format!("result row {i}"));
+        }
+        let input = lines.join("\n");
+
+        let result = filter_docker_exec(&input, 0);
+        assert!(
+            result.contains("lines omitted"),
+            "Should truncate long output"
+        );
+        assert!(result.contains("result row 0"), "Should keep head lines");
+        assert!(result.contains("result row 129"), "Should keep tail lines");
+        assert!(
+            !result.contains("result row 60"),
+            "Should omit middle lines"
+        );
+    }
+
+    #[test]
+    fn docker_exec_strips_psql_borders() {
+        let input = "\
+ id | name  | age
+----+-------+-----
+  1 | Alice |  30
+  2 | Bob   |  25
+----+-------+-----
+(2 rows)";
+
+        let result = filter_docker_exec(input, 0);
+        assert!(!result.contains("----+"), "Should strip border lines");
+        assert!(result.contains("id | name  | age"), "Should keep header");
+        assert!(result.contains("Alice"), "Should keep data rows");
+        assert!(result.contains("Bob"), "Should keep data rows");
+    }
+
+    #[test]
+    fn docker_exec_empty() {
+        let result = filter_docker_exec("", 0);
+        assert_eq!(result, "No output.");
+    }
+
+    #[test]
+    fn docker_exec_error_passthrough() {
+        let input = "Error: connection refused\npsql: FATAL: role does not exist";
+        let result = filter_docker_exec(input, 1);
+        assert_eq!(result, input, "Should pass through on error exit code");
+    }
+
+    #[test]
+    fn docker_exec_short_output_passthrough() {
+        let input = "hello\nworld\nfoo";
+        let result = filter_docker_exec(input, 0);
+        assert_eq!(result, input, "Short output should pass through unchanged");
     }
 }

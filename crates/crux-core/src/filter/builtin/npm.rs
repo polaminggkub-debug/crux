@@ -8,7 +8,11 @@ use super::BuiltinFilterFn;
 pub fn register(m: &mut HashMap<&'static str, BuiltinFilterFn>) {
     m.insert("npm test", filter_npm_test as BuiltinFilterFn);
     m.insert("npm install", filter_npm_install as BuiltinFilterFn);
+    m.insert("npm ci", filter_npm_install as BuiltinFilterFn);
     m.insert("npm run build", filter_npm_build as BuiltinFilterFn);
+    m.insert("npm audit", filter_npm_audit as BuiltinFilterFn);
+    m.insert("npm run test", filter_npm_test as BuiltinFilterFn);
+    m.insert("npm run dev", filter_npm_run_dev as BuiltinFilterFn);
     m.insert("npm ls", filter_npm_ls as BuiltinFilterFn);
     m.insert("npm list", filter_npm_ls as BuiltinFilterFn);
     m.insert("pnpm ls", filter_npm_ls as BuiltinFilterFn);
@@ -152,6 +156,124 @@ pub fn filter_npm_build(output: &str, exit_code: i32) -> String {
         } else {
             lines.join("\n")
         }
+    }
+}
+
+/// Filter npm audit output: on success show clean summary; on failure keep severity counts
+/// and affected package names, drop dependency tree indentation and "fix available" noise.
+pub fn filter_npm_audit(output: &str, exit_code: i32) -> String {
+    if exit_code == 0 {
+        // Look for "found 0 vulnerabilities" summary line
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if trimmed.contains("found 0 vulnerabilities") {
+                return trimmed.to_string();
+            }
+        }
+        return "No vulnerabilities found.".to_string();
+    }
+
+    // On failure: keep severity counts, package names, and summary.
+    // Drop lines starting with spaces (tree indentation), "node_modules/" paths,
+    // "fix available" noise, blank lines, and JSON boilerplate.
+    let severity_re = Regex::new(r"(?i)(critical|high|moderate|low)\s+\d+").unwrap();
+    let pkg_severity_re = Regex::new(r"(?i)(critical|high|moderate|low)\s+\S+@").unwrap();
+    let summary_re = Regex::new(r"(?i)(found\s+)?\d+\s+vulnerabilit").unwrap();
+    let audit_fix_re = Regex::new(r"(?i)npm audit fix").unwrap();
+
+    let mut lines = Vec::new();
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Drop tree-indented lines (leading whitespace in original) and node_modules paths
+        if line.starts_with(' ')
+            && !pkg_severity_re.is_match(trimmed)
+            && !audit_fix_re.is_match(trimmed)
+        {
+            continue;
+        }
+        if trimmed.starts_with("node_modules/") || trimmed.starts_with("fix available") {
+            continue;
+        }
+        if severity_re.is_match(trimmed)
+            || pkg_severity_re.is_match(trimmed)
+            || summary_re.is_match(trimmed)
+            || audit_fix_re.is_match(trimmed)
+            || trimmed.starts_with("npm ERR!")
+        {
+            lines.push(trimmed.to_string());
+        }
+    }
+
+    if lines.is_empty() {
+        format!("npm audit failed (exit code {exit_code}).")
+    } else {
+        lines.join("\n")
+    }
+}
+
+/// Filter npm run dev output: keep URLs, ready/started messages, errors/warnings.
+/// Drop HMR update lines and Vue warn stack traces (collapse to warn message only).
+pub fn filter_npm_run_dev(output: &str, exit_code: i32) -> String {
+    if exit_code != 0 {
+        let mut lines = Vec::new();
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("error")
+                || trimmed.starts_with("Error")
+                || trimmed.starts_with("npm ERR!")
+            {
+                lines.push(trimmed.to_string());
+            }
+        }
+        return if lines.is_empty() {
+            format!("Dev server failed (exit code {exit_code}).")
+        } else {
+            lines.join("\n")
+        };
+    }
+
+    let url_re = Regex::new(r"https?://|localhost").unwrap();
+    let ready_re = Regex::new(r"(?i)(ready in|started|listening on|local:|network:)").unwrap();
+    let warn_re = Regex::new(r"(?i)(error|warn|warning|\[vue warn\])").unwrap();
+    let hmr_re = Regex::new(r"(?i)(hmr|hot module|page reload|vite.*update)").unwrap();
+    let stack_re = Regex::new(r"^\s+at ").unwrap();
+
+    let mut lines = Vec::new();
+    let mut in_vue_warn = false;
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            in_vue_warn = false;
+            continue;
+        }
+        // Drop HMR noise
+        if hmr_re.is_match(trimmed) {
+            continue;
+        }
+        // Vue warn stack trace: keep the warn line, drop subsequent "at " lines
+        if trimmed.contains("[Vue warn]") {
+            in_vue_warn = true;
+            lines.push(trimmed.to_string());
+            continue;
+        }
+        if in_vue_warn && stack_re.is_match(line) {
+            continue;
+        }
+        in_vue_warn = false;
+
+        if url_re.is_match(trimmed) || ready_re.is_match(trimmed) || warn_re.is_match(trimmed) {
+            lines.push(trimmed.to_string());
+        }
+    }
+
+    if lines.is_empty() {
+        "Dev server started.".to_string()
+    } else {
+        lines.join("\n")
     }
 }
 
@@ -437,5 +559,127 @@ npm ERR! extraneous: leftpad@1.0.0 /Users/polamin/Documents/ssp-erp/node_modules
         let result = filter_npm_ls(input, 0);
         assert!(result.starts_with("myapp@1.0.0"));
         assert!(!result.contains("C:\\Users"));
+    }
+
+    // --- npm ci tests ---
+
+    #[test]
+    fn npm_ci_uses_install_filter() {
+        let input = "\
+added 124 packages in 3s
+up to date, audited 125 packages in 2s";
+        let result = filter_npm_install(input, 0);
+        assert!(result.contains("added 124 packages"));
+        assert!(result.contains("up to date"));
+    }
+
+    // --- npm audit tests ---
+
+    #[test]
+    fn npm_audit_clean() {
+        let input = "\
+found 0 vulnerabilities";
+        let result = filter_npm_audit(input, 0);
+        assert_eq!(result, "found 0 vulnerabilities");
+    }
+
+    #[test]
+    fn npm_audit_clean_no_summary() {
+        let result = filter_npm_audit("", 0);
+        assert_eq!(result, "No vulnerabilities found.");
+    }
+
+    #[test]
+    fn npm_audit_with_vulns() {
+        let input = "\
+# npm audit report
+
+lodash  <4.17.21
+Severity: high
+Prototype Pollution - https://npmjs.com/advisories/1523
+fix available via `npm audit fix`
+node_modules/lodash
+
+2 vulnerabilities (1 moderate, 1 high)
+
+To address all issues, run:
+  npm audit fix";
+        let result = filter_npm_audit(input, 1);
+        // Should keep severity and summary lines
+        assert!(result.contains("2 vulnerabilities"));
+        // Should keep the audit fix suggestion
+        assert!(result.contains("npm audit fix"));
+        // Should drop node_modules path lines
+        assert!(!result.contains("node_modules/lodash"));
+        // Should drop leading-space tree lines
+        assert!(!result.contains("  npm audit fix"));
+    }
+
+    // --- npm run dev tests ---
+
+    #[test]
+    fn npm_run_dev_keeps_url() {
+        let input = "\
+> myapp@1.0.0 dev
+> vite
+
+  VITE v5.0.0  ready in 312 ms
+
+  ➜  Local:   http://localhost:5173/
+  ➜  Network: use --host to expose";
+        let result = filter_npm_run_dev(input, 0);
+        assert!(result.contains("http://localhost:5173/"));
+        assert!(result.contains("ready in"));
+    }
+
+    #[test]
+    fn npm_run_dev_drops_hmr() {
+        let input = "\
+  ➜  Local:   http://localhost:5173/
+[vite] hmr update /src/App.vue
+[vite] page reload src/main.ts";
+        let result = filter_npm_run_dev(input, 0);
+        assert!(result.contains("http://localhost:5173/"));
+        assert!(!result.contains("hmr update"));
+        assert!(!result.contains("page reload"));
+    }
+
+    #[test]
+    fn npm_run_dev_collapses_vue_warn() {
+        let input = "\
+  ➜  Local:   http://localhost:5173/
+[Vue warn]: Missing required prop: \"value\"
+  at <MyComponent value=undefined >
+  at <App>
+  at <RouterView>";
+        let result = filter_npm_run_dev(input, 0);
+        assert!(result.contains("[Vue warn]"));
+        assert!(!result.contains("at <MyComponent"));
+        assert!(!result.contains("at <App>"));
+    }
+
+    #[test]
+    fn npm_run_dev_drops_noise() {
+        let input = "\
+  VITE v6.0.7  ready in 342 ms
+
+  ➜  Local:   http://localhost:5174/
+  ➜  Network: use --host to expose
+  ➜  press h + enter to show help";
+        let result = filter_npm_run_dev(input, 0);
+        assert!(result.contains("http://localhost:5174/"));
+        assert!(result.contains("ready in"));
+        // Help text line has no URL/ready/error match — dropped
+        assert!(!result.contains("press h + enter"));
+    }
+
+    #[test]
+    fn npm_run_dev_failure() {
+        let input = "\
+Error: Cannot find module './missing'
+npm ERR! code ELIFECYCLE";
+        let result = filter_npm_run_dev(input, 1);
+        assert!(result.contains("Error:"));
+        assert!(result.contains("npm ERR!"));
     }
 }

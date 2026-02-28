@@ -3,6 +3,7 @@ use std::sync::LazyLock;
 
 pub mod cargo;
 pub mod docker;
+pub mod firebase;
 pub mod fs;
 pub mod gh;
 pub mod git;
@@ -31,6 +32,7 @@ static REGISTRY: LazyLock<HashMap<&'static str, BuiltinFilterFn>> = LazyLock::ne
     testrunners::register(&mut m);
     jsbuild::register(&mut m);
     docker::register(&mut m);
+    firebase::register(&mut m);
     python::register(&mut m);
     golang::register(&mut m);
     php::register(&mut m);
