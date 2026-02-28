@@ -37,12 +37,7 @@ pub fn filter_docker_ps(output: &str, _exit_code: i32) -> String {
     let strip_cols: Vec<usize> = col_positions
         .iter()
         .enumerate()
-        .filter(|(_, c)| {
-            matches!(
-                c.name.as_str(),
-                "PORTS" | "CONTAINER ID" | "CREATED"
-            )
-        })
+        .filter(|(_, c)| matches!(c.name.as_str(), "PORTS" | "CONTAINER ID" | "CREATED"))
         .map(|(i, _)| i)
         .collect();
 
@@ -556,7 +551,11 @@ fn strip_columns(line: &str, cols: &[ColumnDef], strip_indices: &[usize]) -> Str
         if col.start >= result.len() {
             continue;
         }
-        let end = if col.end < line_len { col.end } else { result.len() };
+        let end = if col.end < line_len {
+            col.end
+        } else {
+            result.len()
+        };
         let end = end.min(result.len());
         result = format!("{}{}", &result[..col.start], &result[end..]);
     }
@@ -603,14 +602,8 @@ def789abc012   redis:7        \"redis-ser\"   3 hours ago    Up 3 hours    0.0.0
         );
         assert!(!result.contains("CONTAINER ID"));
         // CREATED stripped
-        assert!(
-            !result.contains("2 hours ago"),
-            "Should strip CREATED data"
-        );
-        assert!(
-            !result.contains("3 hours ago"),
-            "Should strip CREATED data"
-        );
+        assert!(!result.contains("2 hours ago"), "Should strip CREATED data");
+        assert!(!result.contains("3 hours ago"), "Should strip CREATED data");
         assert!(!result.contains("CREATED"));
         // Useful columns kept
         assert!(result.contains("nginx:latest"));

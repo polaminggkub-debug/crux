@@ -521,11 +521,7 @@ fn skip_to_semicolon_or_dollar(lines: &[&str], start: usize) -> usize {
 
 /// Flatten a multi-line statement into a single line, collapsing whitespace.
 fn flatten_statement(lines: &[&str]) -> String {
-    let joined: String = lines
-        .iter()
-        .map(|l| l.trim())
-        .collect::<Vec<_>>()
-        .join(" ");
+    let joined: String = lines.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" ");
     // Collapse multiple spaces
     let mut result = String::with_capacity(joined.len());
     let mut prev_space = false;
@@ -1080,7 +1076,10 @@ supabase local development setup is running."#;
             "got: {result}"
         );
         assert!(result.contains("id"), "should list column names: {result}");
-        assert!(result.contains("name"), "should list column names: {result}");
+        assert!(
+            result.contains("name"),
+            "should list column names: {result}"
+        );
         assert!(result.contains("[2 columns]"), "got: {result}");
         // Should NOT contain full DDL details
         assert!(
@@ -1177,10 +1176,7 @@ GRANT SELECT ON TABLE public.users TO anon;";
         );
 
         // GRANTs counted
-        assert!(
-            result.contains("2 permission statements"),
-            "got: {result}"
-        );
+        assert!(result.contains("2 permission statements"), "got: {result}");
     }
 
     #[test]
@@ -1220,14 +1216,8 @@ CREATE POLICY \"Users can view own data\" ON public.users
     USING (auth.uid() = id);";
 
         let result = summarize_sql(sql);
-        assert!(
-            result.contains("CREATE POLICY"),
-            "got: {result}"
-        );
-        assert!(
-            result.contains("ON public.users"),
-            "got: {result}"
-        );
+        assert!(result.contains("CREATE POLICY"), "got: {result}");
+        assert!(result.contains("ON public.users"), "got: {result}");
         // Should not contain the USING clause
         assert!(
             !result.contains("auth.uid()"),
@@ -1306,10 +1296,7 @@ CREATE TABLE public.orders (
             result.contains("CREATE TABLE public.orders (id, user_id, total) [3 columns]"),
             "got: {result}"
         );
-        assert!(
-            result.contains("[2 constraints]"),
-            "got: {result}"
-        );
+        assert!(result.contains("[2 constraints]"), "got: {result}");
     }
 
     // -- db reset tests --

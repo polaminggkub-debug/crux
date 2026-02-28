@@ -290,7 +290,10 @@ Hosting URL: https://my-project.web.app";
 
         // Result should be just 1 line.
         let line_count = result.lines().count();
-        assert_eq!(line_count, 1, "expected 1 line on clean success, got {line_count}");
+        assert_eq!(
+            line_count, 1,
+            "expected 1 line on clean success, got {line_count}"
+        );
     }
 
     #[test]
@@ -324,7 +327,10 @@ Warning: some deprecation notice
 Hosting URL: https://my-project.web.app";
 
         let result = filter_firebase_deploy(input, 0);
-        assert!(result.contains("Deploy complete!"), "should have deploy line");
+        assert!(
+            result.contains("Deploy complete!"),
+            "should have deploy line"
+        );
         assert!(result.contains("Hosting:"), "should have hosting URL");
         assert!(
             result.contains("Warning: some deprecation notice"),
@@ -332,7 +338,10 @@ Hosting URL: https://my-project.web.app";
         );
 
         let line_count = result.lines().count();
-        assert_eq!(line_count, 2, "expected 2 lines (deploy + warning), got {line_count}");
+        assert_eq!(
+            line_count, 2,
+            "expected 2 lines (deploy + warning), got {line_count}"
+        );
     }
 
     #[test]
@@ -387,7 +396,10 @@ i  Preparing the list of your Firebase Hosting sites.
 
         let result = filter_firebase_hosting_sites_list(input, 0);
 
-        assert!(result.starts_with("3 hosting sites:"), "should have count header");
+        assert!(
+            result.starts_with("3 hosting sites:"),
+            "should have count header"
+        );
         assert!(
             result.contains("my-app → https://my-app.web.app"),
             "should have first site"
@@ -421,7 +433,10 @@ i  Preparing the list of your Firebase Hosting sites.
 └──────────┴──────────────────────────────┴────────┘";
 
         let result = filter_firebase_hosting_sites_list(input, 0);
-        assert!(result.starts_with("1 hosting site:"), "singular form for 1 site");
+        assert!(
+            result.starts_with("1 hosting site:"),
+            "singular form for 1 site"
+        );
         assert!(result.contains("my-site → https://my-site.web.app"));
     }
 
@@ -501,7 +516,10 @@ Hosting URL: https://ssp-erp.web.app";
 
         let result = filter_firebase_deploy(input, 0);
 
-        assert_eq!(result, "✔ Deploy complete! Hosting: https://ssp-erp.web.app");
+        assert_eq!(
+            result,
+            "✔ Deploy complete! Hosting: https://ssp-erp.web.app"
+        );
 
         // Verify significant savings.
         let input_bytes = input.len();

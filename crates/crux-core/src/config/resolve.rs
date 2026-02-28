@@ -115,7 +115,10 @@ fn strip_shell_noise(cmd: &str) -> String {
         if let Some(pipe_pos) = result.rfind('|') {
             let after_pipe = result[pipe_pos + 1..].trim();
             let pipe_cmd = after_pipe.split_whitespace().next().unwrap_or("");
-            if matches!(pipe_cmd, "head" | "tail" | "grep" | "sort" | "wc" | "less" | "more") {
+            if matches!(
+                pipe_cmd,
+                "head" | "tail" | "grep" | "sort" | "wc" | "less" | "more"
+            ) {
                 result = result[..pipe_pos].trim_end().to_string();
             }
         }
@@ -123,7 +126,9 @@ fn strip_shell_noise(cmd: &str) -> String {
         // Remove trailing redirections: 2>&1, 2>/dev/null, >/dev/null, etc.
         for pattern in &["2>&1", "2>/dev/null", ">/dev/null", "&>/dev/null"] {
             if result.ends_with(pattern) {
-                result = result[..result.len() - pattern.len()].trim_end().to_string();
+                result = result[..result.len() - pattern.len()]
+                    .trim_end()
+                    .to_string();
             }
         }
 

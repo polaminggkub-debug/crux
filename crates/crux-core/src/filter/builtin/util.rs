@@ -255,12 +255,7 @@ fn compress_json(body: &str) -> String {
     let mut result = Vec::new();
 
     // Noisy fields to skip entirely
-    let skip_fields = [
-        "\"id\"",
-        "\"node_id\"",
-        "\"avatar_url\"",
-        "\"gravatar_id\"",
-    ];
+    let skip_fields = ["\"id\"", "\"node_id\"", "\"avatar_url\"", "\"gravatar_id\""];
 
     let mut array_depth = 0;
     let mut array_item_count: Vec<usize> = Vec::new();
@@ -322,7 +317,11 @@ fn compress_json(body: &str) -> String {
         // Inside an array at depth > 0: count items (lines starting with `{` or standalone values)
         if array_depth > 0 {
             if let Some(count) = array_item_count.last_mut() {
-                if trimmed.starts_with('{') || trimmed.starts_with('"') || trimmed == "}" || trimmed == "}," {
+                if trimmed.starts_with('{')
+                    || trimmed.starts_with('"')
+                    || trimmed == "}"
+                    || trimmed == "},"
+                {
                     // Object boundary or value in array
                     if trimmed.starts_with('{') {
                         *count += 1;
