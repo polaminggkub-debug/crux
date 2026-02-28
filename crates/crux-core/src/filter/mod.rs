@@ -11,6 +11,7 @@ pub mod section;
 pub mod skip;
 pub mod tee;
 pub mod template;
+pub mod universal;
 pub mod variant;
 
 use crate::config::FilterConfig;
@@ -18,6 +19,7 @@ use crate::config::FilterConfig;
 /// Apply a full filter pipeline to command output.
 ///
 /// Pipeline order:
+///  0. `universal::pre_filter` — strip ANSI, remove progress bars (always)
 ///  1. `match_output` — short-circuit if output contains substring
 ///  2. Builtin — short-circuit if registered handler exists
 ///  3. Lua — short-circuit if returns Some (feature-gated)
@@ -30,18 +32,22 @@ use crate::config::FilterConfig;
 /// 10. `template` — render with context vars/sections
 /// 11. `trim_trailing_whitespace`
 /// 12. `collapse_blank_lines`
+/// 13. `universal::post_filter` — collapse blanks, remove hints/notes (always)
 pub fn apply_filter(config: &FilterConfig, output: &str, exit_code: i32) -> String {
+    // 0. Universal pre-filter (ANSI strip, progress bar removal)
+    let output = universal::pre_filter(output);
+
     // 1. match_output — short-circuit on substring match
     if !config.match_output.is_empty() {
-        if let Some(result) = match_output::apply_match_output(output, &config.match_output) {
-            return result;
+        if let Some(result) = match_output::apply_match_output(&output, &config.match_output) {
+            return universal::post_filter(&result);
         }
     }
 
     // 2. Builtin — short-circuit if registered (unless disabled)
     if config.builtin != Some(false) {
         if let Some(builtin_fn) = builtin::registry().get(config.command.as_str()) {
-            return builtin_fn(output, exit_code);
+            return universal::post_filter(&builtin_fn(&output, exit_code));
         }
     }
 
@@ -50,19 +56,19 @@ pub fn apply_filter(config: &FilterConfig, output: &str, exit_code: i32) -> Stri
     {
         if let Some(ref lua_config) = config.lua {
             let lua_result = if let Some(ref source) = lua_config.source {
-                lua::apply_lua(source, output, exit_code, &[])
+                lua::apply_lua(source, &output, exit_code, &[])
             } else if let Some(ref file) = lua_config.file {
-                lua::apply_lua_file(file, output, exit_code, &[])
+                lua::apply_lua_file(file, &output, exit_code, &[])
             } else {
                 None
             };
             if let Some(result) = lua_result {
-                return result;
+                return universal::post_filter(&result);
             }
         }
     }
 
-    let mut result = output.to_string();
+    let mut result = output;
     let mut ctx = context::FilterContext::new(exit_code);
 
     // 4. Strip ANSI escape codes
@@ -112,7 +118,8 @@ pub fn apply_filter(config: &FilterConfig, output: &str, exit_code: i32) -> Stri
         result = cleanup::collapse_blank_lines(&result);
     }
 
-    result
+    // 13. Universal post-filter (collapse blanks, remove hints/notes)
+    universal::post_filter(&result)
 }
 
 #[cfg(test)]

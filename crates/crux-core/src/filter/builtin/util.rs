@@ -7,6 +7,8 @@ pub fn register(m: &mut HashMap<&'static str, BuiltinFilterFn>) {
     m.insert("curl", filter_curl as BuiltinFilterFn);
     m.insert("wget", filter_wget as BuiltinFilterFn);
     m.insert("wc", filter_wc as BuiltinFilterFn);
+    m.insert("env", filter_env as BuiltinFilterFn);
+    m.insert("printenv", filter_env as BuiltinFilterFn);
 }
 
 /// Filter curl output: strip progress bars and download stats.
@@ -151,6 +153,56 @@ pub fn filter_wc(output: &str, _exit_code: i32) -> String {
     result.join("\n")
 }
 
+/// Secret key patterns — if a var name contains any of these, mask the value.
+const SECRET_PATTERNS: &[&str] = &["PASSWORD", "SECRET", "TOKEN", "KEY", "CREDENTIAL", "AUTH"];
+
+/// Check if a variable name looks like it holds a secret.
+fn is_secret_var(name: &str) -> bool {
+    let upper = name.to_uppercase();
+    SECRET_PATTERNS.iter().any(|pat| upper.contains(pat))
+}
+
+/// Filter env/printenv output: mask secrets, truncate long values, sort alphabetically.
+/// On error, pass through unmodified.
+pub fn filter_env(output: &str, exit_code: i32) -> String {
+    if exit_code != 0 {
+        return output.to_string();
+    }
+
+    let mut entries: Vec<String> = Vec::new();
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if let Some(eq_pos) = trimmed.find('=') {
+            let name = &trimmed[..eq_pos];
+            let value = &trimmed[eq_pos + 1..];
+
+            if is_secret_var(name) {
+                entries.push(format!("{name}=***"));
+            } else if value.len() > 200 {
+                entries.push(format!("{name}={}...", &value[..200]));
+            } else {
+                entries.push(trimmed.to_string());
+            }
+        } else {
+            // Lines without '=' (unusual but possible) — keep as-is
+            entries.push(trimmed.to_string());
+        }
+    }
+
+    entries.sort();
+
+    if entries.is_empty() {
+        "No environment variables.".to_string()
+    } else {
+        entries.join("\n")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,6 +291,67 @@ mod tests {
         let result = filter_wc(&input, 0);
         assert!(result.contains("(55 files)"));
         assert!(result.contains("total"));
+    }
+
+    // -- env tests --
+
+    #[test]
+    fn env_masks_secrets() {
+        let input =
+            "HOME=/home/user\nDATABASE_PASSWORD=supersecret\nAPI_TOKEN=abc123\nPATH=/usr/bin";
+        let result = filter_env(input, 0);
+        assert!(result.contains("DATABASE_PASSWORD=***"));
+        assert!(result.contains("API_TOKEN=***"));
+        assert!(result.contains("HOME=/home/user"));
+        assert!(result.contains("PATH=/usr/bin"));
+        assert!(!result.contains("supersecret"));
+        assert!(!result.contains("abc123"));
+    }
+
+    #[test]
+    fn env_masks_various_secret_patterns() {
+        let input = "AWS_SECRET_ACCESS_KEY=xxx\nGH_AUTH_TOKEN=yyy\nDB_CREDENTIAL=zzz\nMY_KEY=aaa";
+        let result = filter_env(input, 0);
+        assert!(result.contains("AWS_SECRET_ACCESS_KEY=***"));
+        assert!(result.contains("GH_AUTH_TOKEN=***"));
+        assert!(result.contains("DB_CREDENTIAL=***"));
+        assert!(result.contains("MY_KEY=***"));
+    }
+
+    #[test]
+    fn env_truncates_long_values() {
+        let long_val = "x".repeat(300);
+        let input = format!("LONG_VAR={long_val}\nSHORT=ok");
+        let result = filter_env(&input, 0);
+        assert!(result.contains("LONG_VAR="));
+        assert!(result.contains("..."));
+        // Should have 200 chars of value + "..."
+        let long_line = result.lines().find(|l| l.starts_with("LONG_VAR=")).unwrap();
+        assert!(long_line.ends_with("..."));
+        assert_eq!(long_line.len(), "LONG_VAR=".len() + 200 + 3);
+    }
+
+    #[test]
+    fn env_sorts_alphabetically() {
+        let input = "ZEBRA=1\nAPPLE=2\nMIDDLE=3";
+        let result = filter_env(input, 0);
+        let lines: Vec<&str> = result.lines().collect();
+        assert_eq!(lines[0], "APPLE=2");
+        assert_eq!(lines[1], "MIDDLE=3");
+        assert_eq!(lines[2], "ZEBRA=1");
+    }
+
+    #[test]
+    fn env_error_passthrough() {
+        let input = "some error output";
+        let result = filter_env(input, 1);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn env_empty() {
+        let result = filter_env("", 0);
+        assert_eq!(result, "No environment variables.");
     }
 
     #[test]

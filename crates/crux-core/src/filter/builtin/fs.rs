@@ -171,23 +171,66 @@ fn truncate_lines(lines: &[&str], keep: usize, noun: &str) -> String {
     out
 }
 
-/// Filter `find`: first 30 results + count. Remove "Permission denied" errors.
+/// Noise directories to filter from `find` output.
+const NOISE_DIRS: &[&str] = &[
+    "node_modules/",
+    ".git/",
+    "__pycache__/",
+    ".next/",
+    "dist/",
+    "target/",
+    ".cache/",
+    ".tox/",
+];
+
+/// Check if a path is a noise path that should be filtered.
+fn is_noise_path(line: &str) -> bool {
+    let trimmed = line.trim();
+    for dir in NOISE_DIRS {
+        if trimmed.contains(dir) {
+            return true;
+        }
+    }
+    // vendor/ only when inside node_modules
+    if trimmed.contains("vendor/") && trimmed.contains("node_modules") {
+        return true;
+    }
+    false
+}
+
+/// Filter `find`: remove "Permission denied" errors and noise directory entries,
+/// then truncate to first 30 results + count.
 pub fn filter_find(output: &str, _exit_code: i32) -> String {
+    let mut noise_count = 0;
     let lines: Vec<&str> = output
         .lines()
         .filter(|l| !l.contains("Permission denied"))
+        .filter(|l| {
+            if is_noise_path(l) {
+                noise_count += 1;
+                false
+            } else {
+                true
+            }
+        })
         .collect();
 
-    if lines.len() <= 30 {
-        return lines.join("\n");
+    let mut out = if lines.len() <= 30 {
+        lines.join("\n")
+    } else {
+        let total = lines.len();
+        let mut result: Vec<&str> = lines[..30].to_vec();
+        result.push("");
+        let msg = format!("... and {} more results ({total} total)", total - 30);
+        let mut o = result.join("\n");
+        o.push('\n');
+        o.push_str(&msg);
+        o
+    };
+
+    if noise_count > 0 {
+        out.push_str(&format!("\n(filtered {noise_count} noise paths)"));
     }
-    let total = lines.len();
-    let mut result: Vec<&str> = lines[..30].to_vec();
-    result.push("");
-    let msg = format!("... and {} more results ({total} total)", total - 30);
-    let mut out = result.join("\n");
-    out.push('\n');
-    out.push_str(&msg);
     out
 }
 
@@ -236,20 +279,19 @@ pub fn filter_tree(output: &str, _exit_code: i32) -> String {
     out
 }
 
-/// Filter `cat`: if > 200 lines, show first 50 + last 20 + summary.
+/// Filter `cat`: if > 200 lines, show first 50 + last 20 + truncation notice.
 pub fn filter_cat(output: &str, _exit_code: i32) -> String {
     let lines: Vec<&str> = output.lines().collect();
     if lines.len() <= 200 {
         return output.to_string();
     }
     let total = lines.len();
+    let truncated = total - 50 - 20;
     let head: Vec<&str> = lines[..50].to_vec();
     let tail: Vec<&str> = lines[total - 20..].to_vec();
 
     let mut out = head.join("\n");
-    out.push_str("\n\n... (");
-    out.push_str(&total.to_string());
-    out.push_str(" lines total)\n\n");
+    out.push_str(&format!("\n\n... ({truncated} lines truncated) ...\n\n"));
     out.push_str(&tail.join("\n"));
     out
 }
@@ -435,6 +477,69 @@ drwxr-xr-x@ 3 user  staff  96 Feb  1 10:00 dir_with_xattr
         assert_eq!(result, input);
     }
 
+    #[test]
+    fn find_filters_node_modules() {
+        let input = "/src/main.rs\n/node_modules/foo/bar.js\n/node_modules/.cache/x\n/src/lib.rs";
+        let result = filter_find(input, 0);
+        assert!(result.contains("/src/main.rs"));
+        assert!(result.contains("/src/lib.rs"));
+        assert!(!result.contains("node_modules"));
+        assert!(result.contains("(filtered 2 noise paths)"));
+    }
+
+    #[test]
+    fn find_filters_git_and_pycache() {
+        let input =
+            "/project/.git/objects/abc\n/project/__pycache__/mod.cpython.pyc\n/project/app.py";
+        let result = filter_find(input, 0);
+        assert!(!result.contains(".git/"));
+        assert!(!result.contains("__pycache__/"));
+        assert!(result.contains("/project/app.py"));
+        assert!(result.contains("(filtered 2 noise paths)"));
+    }
+
+    #[test]
+    fn find_filters_multiple_noise_dirs() {
+        let input = "\
+/src/main.rs
+/project/.next/static/chunk.js
+/project/dist/bundle.js
+/project/target/debug/binary
+/project/.cache/data
+/project/.tox/py39/lib/site.py
+/src/lib.rs";
+        let result = filter_find(input, 0);
+        assert!(result.contains("/src/main.rs"));
+        assert!(result.contains("/src/lib.rs"));
+        assert!(!result.contains(".next/"));
+        assert!(!result.contains("dist/"));
+        assert!(!result.contains("target/"));
+        assert!(!result.contains(".cache/"));
+        assert!(!result.contains(".tox/"));
+        assert!(result.contains("(filtered 5 noise paths)"));
+    }
+
+    #[test]
+    fn find_filters_vendor_only_in_node_modules() {
+        let input = "\
+/project/vendor/lib.go
+/project/node_modules/vendor/pkg.js
+/src/main.go";
+        let result = filter_find(input, 0);
+        // vendor/ outside node_modules is kept
+        assert!(result.contains("/project/vendor/lib.go"));
+        // vendor/ inside node_modules is filtered
+        assert!(!result.contains("node_modules/vendor"));
+        assert!(result.contains("(filtered 1 noise paths)"));
+    }
+
+    #[test]
+    fn find_no_noise_no_suffix() {
+        let input = "/src/main.rs\n/src/lib.rs";
+        let result = filter_find(input, 0);
+        assert!(!result.contains("filtered"));
+    }
+
     // ---- grep tests ----
 
     #[test]
@@ -524,7 +629,7 @@ drwxr-xr-x@ 3 user  staff  96 Feb  1 10:00 dir_with_xattr
         let result = filter_cat(&input, 0);
         assert!(result.contains("line 0"));
         assert!(result.contains("line 49"));
-        assert!(result.contains("(300 lines total)"));
+        assert!(result.contains("(230 lines truncated)"));
         assert!(result.contains("line 280"));
         assert!(result.contains("line 299"));
         // Middle lines should be omitted
@@ -546,8 +651,24 @@ drwxr-xr-x@ 3 user  staff  96 Feb  1 10:00 dir_with_xattr
         let result = filter_cat(&input, 0);
         assert!(result.contains("L0"));
         assert!(result.contains("L49"));
-        assert!(result.contains("(201 lines total)"));
+        assert!(result.contains("(131 lines truncated)"));
         assert!(result.contains("L181"));
         assert!(result.contains("L200"));
+    }
+
+    #[test]
+    fn cat_truncation_format() {
+        let lines: Vec<String> = (0..250).map(|i| format!("x{i}")).collect();
+        let input = lines.join("\n");
+        let result = filter_cat(&input, 0);
+        // Should have the exact format: "... (N lines truncated) ..."
+        assert!(result.contains("... (180 lines truncated) ..."));
+        // First 50 present
+        assert!(result.contains("x49"));
+        // Last 20 present
+        assert!(result.contains("x230"));
+        assert!(result.contains("x249"));
+        // Line 50 should NOT be present
+        assert!(!result.contains("\nx50\n"));
     }
 }

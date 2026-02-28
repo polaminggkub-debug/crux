@@ -10,6 +10,14 @@ pub fn register(m: &mut HashMap<&'static str, BuiltinFilterFn>) {
     m.insert("docker images", filter_docker_images as BuiltinFilterFn);
     m.insert("docker logs", filter_docker_logs as BuiltinFilterFn);
     m.insert("docker compose", filter_docker_compose as BuiltinFilterFn);
+    m.insert(
+        "docker compose logs",
+        filter_docker_compose_logs as BuiltinFilterFn,
+    );
+    m.insert(
+        "docker-compose logs",
+        filter_docker_compose_logs as BuiltinFilterFn,
+    );
 }
 
 /// Filter docker ps: keep header + container lines, strip PORTS column, show NAME, STATUS, IMAGE.
@@ -192,6 +200,72 @@ pub fn filter_docker_compose(output: &str, exit_code: i32) -> String {
     } else {
         result.join("\n")
     }
+}
+
+/// Filter docker compose logs: strip timestamps, deduplicate container prefixes,
+/// keep error/warning lines, truncate if > 200 lines.
+pub fn filter_docker_compose_logs(output: &str, _exit_code: i32) -> String {
+    if output.trim().is_empty() {
+        return "No log output.".to_string();
+    }
+
+    let timestamp_re = Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.\d]*Z?\s*").unwrap();
+    let container_prefix_re = Regex::new(r"^(\S+\s*\| ?)").unwrap();
+
+    let raw_lines: Vec<&str> = output.lines().collect();
+    let cleaned = dedupe_container_prefixes(&raw_lines, &timestamp_re, &container_prefix_re);
+
+    if cleaned.len() <= 200 {
+        return cleaned.join("\n");
+    }
+
+    let total = cleaned.len();
+    let omitted = total - 50 - 50;
+    let mut result: Vec<&str> = cleaned[..50].iter().map(|s| s.as_str()).collect();
+    result.push("");
+    let msg = format!("...{omitted} lines omitted...");
+    let mut out = result.join("\n");
+    out.push('\n');
+    out.push_str(&msg);
+    out.push('\n');
+    for line in &cleaned[total - 50..] {
+        out.push_str(line);
+        out.push('\n');
+    }
+    // Remove trailing newline
+    out.truncate(out.trim_end().len());
+    out
+}
+
+/// Strip timestamps from lines and deduplicate consecutive container name prefixes.
+fn dedupe_container_prefixes(
+    lines: &[&str],
+    timestamp_re: &Regex,
+    container_re: &Regex,
+) -> Vec<String> {
+    let mut result = Vec::with_capacity(lines.len());
+    let mut last_container: Option<String> = None;
+
+    for line in lines {
+        // First try stripping timestamp at the start of the line
+        let no_ts = strip_timestamp(line, timestamp_re);
+        if let Some(caps) = container_re.captures(&no_ts) {
+            let prefix = caps.get(1).unwrap().as_str().to_string();
+            let rest = &no_ts[prefix.len()..];
+            // Strip timestamp that may appear after the container prefix
+            let rest_clean = strip_timestamp(rest, timestamp_re);
+            if last_container.as_deref() == Some(&prefix) {
+                result.push(format!("  {rest_clean}"));
+            } else {
+                last_container = Some(prefix.clone());
+                result.push(format!("{prefix}{rest_clean}"));
+            }
+        } else {
+            last_container = None;
+            result.push(no_ts);
+        }
+    }
+    result
 }
 
 // -- helpers --
@@ -537,5 +611,85 @@ error during connect: connection refused";
     fn docker_compose_empty_failure() {
         let result = filter_docker_compose("", 1);
         assert_eq!(result, "Docker compose failed (exit code 1).");
+    }
+
+    // -- docker compose logs tests --
+
+    #[test]
+    fn compose_logs_strips_timestamps() {
+        let input = "\
+web-1  | 2024-01-15T10:30:00.123Z Starting server...
+web-1  | 2024-01-15T10:30:01.456Z Listening on port 8080
+db-1   | 2024-01-15T10:30:00.000Z PostgreSQL ready";
+
+        let result = filter_docker_compose_logs(input, 0);
+        assert!(!result.contains("2024-01-15"), "Should strip timestamps");
+        assert!(result.contains("Starting server..."));
+        assert!(result.contains("Listening on port 8080"));
+        assert!(result.contains("PostgreSQL ready"));
+    }
+
+    #[test]
+    fn compose_logs_dedupes_container_prefixes() {
+        let input = "\
+web-1  | Starting server...
+web-1  | Listening on port 8080
+web-1  | Ready to accept connections
+db-1   | PostgreSQL starting
+db-1   | PostgreSQL ready";
+
+        let result = filter_docker_compose_logs(input, 0);
+        // First occurrence of each container keeps prefix
+        assert!(result.contains("web-1  | Starting server..."));
+        assert!(result.contains("db-1   | PostgreSQL starting"));
+        // Subsequent lines from same container omit prefix
+        let lines: Vec<&str> = result.lines().collect();
+        assert_eq!(lines[1].trim(), "Listening on port 8080");
+        assert_eq!(lines[2].trim(), "Ready to accept connections");
+        assert_eq!(lines[4].trim(), "PostgreSQL ready");
+    }
+
+    #[test]
+    fn compose_logs_truncates_long_output() {
+        let mut lines = Vec::new();
+        for i in 0..250 {
+            lines.push(format!("web-1  | 2024-01-15T10:30:00Z Log line {i}"));
+        }
+        let input = lines.join("\n");
+
+        let result = filter_docker_compose_logs(&input, 0);
+        assert!(result.contains("...150 lines omitted..."));
+        assert!(result.contains("Log line 0"));
+        assert!(result.contains("Log line 249"));
+    }
+
+    #[test]
+    fn compose_logs_empty() {
+        let result = filter_docker_compose_logs("", 0);
+        assert_eq!(result, "No log output.");
+    }
+
+    #[test]
+    fn compose_logs_short_passthrough() {
+        let input = "web-1  | Hello\ndb-1   | World";
+        let result = filter_docker_compose_logs(input, 0);
+        assert!(result.contains("web-1  | Hello"));
+        assert!(result.contains("db-1   | World"));
+        assert!(!result.contains("omitted"));
+    }
+
+    #[test]
+    fn compose_logs_mixed_containers_no_false_dedup() {
+        let input = "\
+web-1  | Request 1
+db-1   | Query 1
+web-1  | Request 2";
+
+        let result = filter_docker_compose_logs(input, 0);
+        let lines: Vec<&str> = result.lines().collect();
+        // web-1 appears, then db-1, then web-1 again — prefix should reappear
+        assert!(lines[0].contains("web-1"));
+        assert!(lines[1].contains("db-1"));
+        assert!(lines[2].contains("web-1"));
     }
 }
