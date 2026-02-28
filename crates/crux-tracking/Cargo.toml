@@ -1,9 +1,13 @@
 [package]
-name = "crux-tracking"
+name = "cruxai-tracking"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+repository.workspace = true
 description = "Token savings tracking and history for crux"
+
+[lib]
+name = "crux_tracking"
 
 [dependencies]
 anyhow = { workspace = true }

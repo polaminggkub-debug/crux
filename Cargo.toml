@@ -7,11 +7,17 @@ members = [
     "crates/crux-tracking",
 ]
 
+# Note: crate names use "cruxai-" prefix on crates.io (crux_core was taken)
+# but directory names remain "crux-" locally
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/polam/crux"
+repository = "https://github.com/polaminggkub-debug/crux"
+homepage = "https://github.com/polaminggkub-debug/crux"
+keywords = ["cli", "ai", "tokens", "filter", "compression"]
+categories = ["command-line-utilities", "development-tools"]
 rust-version = "1.75"
 
 [workspace.dependencies]

@@ -1,9 +1,13 @@
 [package]
-name = "crux-core"
+name = "cruxai-core"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+repository.workspace = true
 description = "Core library for crux: filter engine, config, types"
+
+[lib]
+name = "crux_core"
 
 [features]
 default = []

@@ -327,14 +327,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
-name = "crux-cli"
+name = "cruxai-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "crux-core",
- "crux-hook",
- "crux-tracking",
+ "cruxai-core",
+ "cruxai-hook",
+ "cruxai-tracking",
  "include_dir",
  "regex",
  "serde_json",
@@ -342,7 +342,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "crux-core"
+name = "cruxai-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -358,17 +358,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "crux-hook"
+name = "cruxai-hook"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "crux-core",
+ "cruxai-core",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "crux-tracking"
+name = "cruxai-tracking"
 version = "0.1.0"
 dependencies = [
  "anyhow",

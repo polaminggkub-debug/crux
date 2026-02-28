@@ -1,12 +1,16 @@
 [package]
-name = "crux-hook"
+name = "cruxai-hook"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+repository.workspace = true
 description = "Agent integration hooks for crux (Claude Code, Codex)"
 
+[lib]
+name = "crux_hook"
+
 [dependencies]
-crux-core = { path = "../crux-core" }
+crux_core = { package = "cruxai-core", path = "../crux-core", version = "0.1.0" }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = "1"
