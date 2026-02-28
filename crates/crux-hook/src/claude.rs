@@ -40,21 +40,86 @@ pub fn handle_hook(input: &HookInput) -> Option<HookOutput> {
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    if !should_intercept(command) {
+    if let Some(rewritten) = rewrite_command(command) {
+        let mut new_input = input.tool_input.clone();
+        new_input["command"] = serde_json::Value::String(rewritten);
+
+        Some(HookOutput {
+            hook_specific_output: HookSpecificOutput {
+                hook_event_name: "PreToolUse".into(),
+                permission_decision: "allow".into(),
+                updated_input: Some(new_input),
+            },
+        })
+    } else {
+        None
+    }
+}
+
+/// Attempt to rewrite a command string for crux filtering.
+///
+/// Handles:
+/// - Simple commands: `git status` → `crux run git status`
+/// - Compound commands: `cd /path && git status` → `cd /path && crux run git status`
+/// - Chained commands: `cd /p && cargo test && echo done` → rewrites each eligible part
+fn rewrite_command(command: &str) -> Option<String> {
+    // Simple case: entire command is interceptable
+    if should_intercept(command) {
+        return Some(format!("crux run {command}"));
+    }
+
+    // Compound commands: split on && and ; operators, rewrite eligible parts
+    // Only attempt if the command contains shell operators
+    if !command.contains("&&") && !command.contains(';') {
         return None;
     }
 
-    let new_command = format!("crux run {command}");
-    let mut new_input = input.tool_input.clone();
-    new_input["command"] = serde_json::Value::String(new_command);
+    let mut result = String::new();
+    let mut changed = false;
+    let mut remaining = command;
 
-    Some(HookOutput {
-        hook_specific_output: HookSpecificOutput {
-            hook_event_name: "PreToolUse".into(),
-            permission_decision: "allow".into(),
-            updated_input: Some(new_input),
-        },
-    })
+    while !remaining.is_empty() {
+        // Find next separator (&& or ;)
+        let (sep, sep_pos) = find_next_separator(remaining);
+
+        let (part, rest) = if let Some(pos) = sep_pos {
+            let sep_str = sep.unwrap();
+            (&remaining[..pos], &remaining[pos + sep_str.len()..])
+        } else {
+            (remaining, "")
+        };
+
+        let trimmed = part.trim();
+        if should_intercept(trimmed) {
+            result.push_str(&part.replace(trimmed, &format!("crux run {trimmed}")));
+            changed = true;
+        } else {
+            result.push_str(part);
+        }
+
+        if let Some(sep_str) = sep {
+            result.push_str(sep_str);
+        }
+
+        remaining = rest;
+    }
+
+    if changed { Some(result) } else { None }
+}
+
+/// Find the next `&&` or `;` separator in a command string.
+/// Returns the separator string and its position.
+fn find_next_separator(s: &str) -> (Option<&'static str>, Option<usize>) {
+    let amp = s.find("&&");
+    let semi = s.find(';');
+
+    match (amp, semi) {
+        (Some(a), Some(b)) if a <= b => (Some("&&"), Some(a)),
+        (Some(_), Some(b)) => (Some(";"), Some(b)),
+        (Some(a), None) => (Some("&&"), Some(a)),
+        (None, Some(b)) => (Some(";"), Some(b)),
+        (None, None) => (None, None),
+    }
 }
 
 /// Check if a command should be intercepted by crux.
@@ -390,6 +455,44 @@ mod tests {
     fn wc_command_rewritten() {
         let input = make_input("Bash", "wc -l src/*.rs");
         assert_rewritten(&input, "crux run wc -l src/*.rs");
+    }
+
+    // -- Compound commands --
+
+    #[test]
+    fn cd_then_git_rewritten() {
+        let input = make_input("Bash", "cd /some/path && git status");
+        assert_rewritten(&input, "cd /some/path && crux run git status");
+    }
+
+    #[test]
+    fn cd_then_cargo_test_rewritten() {
+        let input = make_input("Bash", "cd /project && cargo test --release");
+        assert_rewritten(&input, "cd /project && crux run cargo test --release");
+    }
+
+    #[test]
+    fn cd_then_npm_test_rewritten() {
+        let input = make_input("Bash", "cd /app && npm test");
+        assert_rewritten(&input, "cd /app && crux run npm test");
+    }
+
+    #[test]
+    fn cd_then_unknown_passthrough() {
+        let input = make_input("Bash", "cd /path && python script.py");
+        assert_passthrough(&input);
+    }
+
+    #[test]
+    fn multiple_eligible_commands_rewritten() {
+        let input = make_input("Bash", "cd /p && cargo test && git status");
+        assert_rewritten(&input, "cd /p && crux run cargo test && crux run git status");
+    }
+
+    #[test]
+    fn semicolon_compound_rewritten() {
+        let input = make_input("Bash", "cd /p; git log --oneline");
+        assert_rewritten(&input, "cd /p; crux run git log --oneline");
     }
 
     // -- Serialization format --
