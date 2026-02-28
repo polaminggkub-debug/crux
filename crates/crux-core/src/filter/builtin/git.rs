@@ -13,9 +13,12 @@ pub fn register(m: &mut HashMap<&'static str, BuiltinFilterFn>) {
 }
 
 /// Filter git status: keep branch line and file status lines, strip hints and boilerplate.
+/// Normalizes long-format lines to short format and compresses branch tracking info.
 pub fn filter_git_status(output: &str, _exit_code: i32) -> String {
     let mut lines = Vec::new();
     let mut in_untracked = false;
+    let ahead_re = Regex::new(r"ahead of .+ by (\d+) commit").unwrap();
+    let behind_re = Regex::new(r"behind .+ by (\d+) commit").unwrap();
 
     for line in output.lines() {
         let trimmed = line.trim();
@@ -40,11 +43,38 @@ pub fn filter_git_status(output: &str, _exit_code: i32) -> String {
             continue;
         }
 
+        // Compress branch tracking lines
+        if trimmed.starts_with("Your branch is up to date") {
+            // Skip entirely — up-to-date is the default assumption
+            continue;
+        }
+        if trimmed.starts_with("Your branch is ahead") {
+            if let Some(caps) = ahead_re.captures(trimmed) {
+                lines.push(format!("ahead {}", &caps[1]));
+            }
+            continue;
+        }
+        if trimmed.starts_with("Your branch is behind") {
+            if let Some(caps) = behind_re.captures(trimmed) {
+                lines.push(format!("behind {}", &caps[1]));
+            }
+            continue;
+        }
+        // Keep diverged lines as-is (rare)
+        if trimmed.starts_with("Your branch and") {
+            lines.push(trimmed.to_string());
+            continue;
+        }
+
         // Keep file status lines (M, A, D, ??, R, C, U, etc.)
         // Matches short-format lines like "M  src/lib.rs" or "?? file.txt"
         // Also matches long-format status lines like "modified:   file"
         if is_status_file_line(trimmed) {
-            lines.push(trimmed.to_string());
+            if let Some(normalized) = normalize_status_line(trimmed) {
+                lines.push(normalized);
+            } else {
+                lines.push(trimmed.to_string());
+            }
             continue;
         }
 
@@ -58,12 +88,8 @@ pub fn filter_git_status(output: &str, _exit_code: i32) -> String {
             continue;
         }
 
-        // Keep "nothing to commit" or "Your branch is" lines
-        if trimmed.starts_with("nothing to commit")
-            || trimmed.starts_with("no changes added")
-            || trimmed.starts_with("Your branch is")
-            || trimmed.starts_with("Your branch and")
-        {
+        // Keep "nothing to commit" line; skip "no changes added" (redundant)
+        if trimmed.starts_with("nothing to commit") {
             lines.push(trimmed.to_string());
             continue;
         }
@@ -75,6 +101,27 @@ pub fn filter_git_status(output: &str, _exit_code: i32) -> String {
         "nothing to commit, working tree clean".to_string()
     } else {
         lines.join("\n")
+    }
+}
+
+/// Normalize long-format status lines to short format.
+/// Returns `Some(short)` if the line is long-format, `None` if already short.
+fn normalize_status_line(line: &str) -> Option<String> {
+    let long_re =
+        Regex::new(r"^(modified|new file|deleted|renamed|copied|typechange):\s+(.+)$").unwrap();
+    if let Some(caps) = long_re.captures(line) {
+        let code = match &caps[1] {
+            "modified" => "M",
+            "new file" => "A",
+            "deleted" => "D",
+            "renamed" => "R",
+            "copied" => "C",
+            "typechange" => "T",
+            _ => return None,
+        };
+        Some(format!("{}  {}", code, &caps[2]))
+    } else {
+        None
     }
 }
 
@@ -197,6 +244,14 @@ fn flush_hunk(
 pub fn filter_git_log(output: &str, _exit_code: i32) -> String {
     let commit_re = Regex::new(r"^commit\s+([a-f0-9]{7,})").unwrap();
     let author_re = Regex::new(r"^Author:\s+(.+)").unwrap();
+
+    // If no line starts with "commit " + hex hash, output is already compact (e.g., --oneline)
+    let has_full_format = output.lines().any(|l| {
+        l.starts_with("commit ") && l.as_bytes().get(7).is_some_and(|b| b.is_ascii_hexdigit())
+    });
+    if !has_full_format {
+        return output.trim_end().to_string();
+    }
 
     let mut result = Vec::new();
     let mut current_hash = String::new();
@@ -343,6 +398,7 @@ Untracked files:
         assert!(result.contains("M  src/main.rs"));
         assert!(result.contains("?? new_file.txt"));
         assert!(!result.contains("use \"git"));
+        assert!(!result.contains("Your branch"), "got: {result}");
     }
 
     #[test]
@@ -362,16 +418,17 @@ no changes added to commit (use "git add" and/or "git commit -a")"#;
         let result = filter_git_status(input, 0);
         assert!(result.contains("On branch main"), "missing branch line");
         assert!(
-            result.contains("modified:   test.txt"),
+            result.contains("M  test.txt"),
             "missing modified file: got: {result}"
         );
         assert!(
             result.contains("?? new.txt"),
             "missing untracked file: got: {result}"
         );
+        // "no changes added" is now skipped as redundant
         assert!(
-            result.contains("no changes added"),
-            "missing status line: got: {result}"
+            !result.contains("no changes added"),
+            "should skip redundant line: got: {result}"
         );
         // Hint lines like '  (use "git restore..." ...)' should be stripped
         assert!(
@@ -397,9 +454,9 @@ Changes not staged for commit:
 	deleted:    old.txt"#;
 
         let result = filter_git_status(input, 0);
-        assert!(result.contains("new file:   src/new.rs"), "got: {result}");
-        assert!(result.contains("modified:   src/lib.rs"), "got: {result}");
-        assert!(result.contains("deleted:    old.txt"), "got: {result}");
+        assert!(result.contains("A  src/new.rs"), "got: {result}");
+        assert!(result.contains("M  src/lib.rs"), "got: {result}");
+        assert!(result.contains("D  old.txt"), "got: {result}");
     }
 
     #[test]
@@ -412,6 +469,42 @@ nothing to commit, working tree clean"#;
         let result = filter_git_status(input, 0);
         assert!(result.contains("On branch main"));
         assert!(result.contains("nothing to commit"));
+        assert!(!result.contains("Your branch"), "got: {result}");
+        assert!(!result.contains("up to date"), "got: {result}");
+    }
+
+    #[test]
+    fn git_status_normalizes_long_format() {
+        let input = "On branch main\nChanges to be committed:\n\tnew file:   src/new.rs\n\tmodified:   src/lib.rs\n\nChanges not staged for commit:\n\tdeleted:    old.txt\n\trenamed:    a.rs -> b.rs";
+        let result = filter_git_status(input, 0);
+        assert!(result.contains("A  src/new.rs"), "got: {result}");
+        assert!(result.contains("M  src/lib.rs"), "got: {result}");
+        assert!(result.contains("D  old.txt"), "got: {result}");
+        assert!(result.contains("R  a.rs -> b.rs"), "got: {result}");
+    }
+
+    #[test]
+    fn git_status_compresses_ahead() {
+        let input = "On branch main\nYour branch is ahead of 'origin/main' by 3 commits.\n  (use \"git push\" to publish your local commits)\n\nnothing to commit, working tree clean";
+        let result = filter_git_status(input, 0);
+        assert!(result.contains("ahead 3"), "got: {result}");
+        assert!(!result.contains("Your branch"), "got: {result}");
+    }
+
+    #[test]
+    fn git_status_compresses_behind() {
+        let input = "On branch main\nYour branch is behind 'origin/main' by 5 commits, and can be fast-forwarded.\n  (use \"git pull\" to update your local branch)\n\nnothing to commit, working tree clean";
+        let result = filter_git_status(input, 0);
+        assert!(result.contains("behind 5"), "got: {result}");
+        assert!(!result.contains("Your branch"), "got: {result}");
+    }
+
+    #[test]
+    fn git_status_skips_up_to_date() {
+        let input = "On branch main\nYour branch is up to date with 'origin/main'.\n\nnothing to commit, working tree clean";
+        let result = filter_git_status(input, 0);
+        assert!(!result.contains("Your branch"), "got: {result}");
+        assert!(!result.contains("up to date"), "got: {result}");
     }
 
     // -- git diff tests --
@@ -468,6 +561,20 @@ Date:   Tue Jan 2 00:00:00 2024 +0000
         assert!(lines[0].contains("Initial commit"));
         assert!(lines[1].contains("def5678"));
         assert!(lines[1].contains("Add feature X"));
+    }
+
+    #[test]
+    fn git_log_oneline_passthrough() {
+        let input = "abc1234 Initial commit\ndef5678 Add feature X\n1234567 Fix bug";
+        let result = filter_git_log(input, 0);
+        assert_eq!(result, input.trim_end());
+    }
+
+    #[test]
+    fn git_log_short_format_passthrough() {
+        let input = "abc1234 (HEAD -> main, origin/main) Initial commit\ndef5678 Add feature X";
+        let result = filter_git_log(input, 0);
+        assert_eq!(result, input);
     }
 
     // -- git push tests --

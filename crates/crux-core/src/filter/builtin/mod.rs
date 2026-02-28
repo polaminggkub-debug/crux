@@ -12,6 +12,7 @@ pub mod jsbuild;
 pub mod npm;
 pub mod php;
 pub mod python;
+pub mod supabase;
 pub mod testrunners;
 pub mod util;
 
@@ -33,6 +34,7 @@ static REGISTRY: LazyLock<HashMap<&'static str, BuiltinFilterFn>> = LazyLock::ne
     python::register(&mut m);
     golang::register(&mut m);
     php::register(&mut m);
+    supabase::register(&mut m);
     util::register(&mut m);
     m
 });
@@ -70,6 +72,7 @@ mod tests {
         assert!(reg.contains_key("go build"));
         assert!(reg.contains_key("ls"));
         assert!(reg.contains_key("curl"));
+        assert!(reg.contains_key("supabase status"));
     }
 
     #[test]
