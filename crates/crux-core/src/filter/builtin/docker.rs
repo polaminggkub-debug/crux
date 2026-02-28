@@ -254,7 +254,7 @@ fn dedupe_container_prefixes(
             let rest = &no_ts[prefix.len()..];
             // Strip timestamp that may appear after the container prefix
             let rest_clean = strip_timestamp(rest, timestamp_re);
-            if last_container.as_deref() == Some(&prefix) {
+            if last_container.as_deref() == Some(prefix.as_str()) {
                 result.push(format!("  {rest_clean}"));
             } else {
                 last_container = Some(prefix.clone());
