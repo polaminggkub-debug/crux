@@ -64,6 +64,9 @@ mod tests {
         assert!(reg.contains_key("docker ps"));
         assert!(reg.contains_key("pytest"));
         assert!(reg.contains_key("tsc"));
+        assert!(reg.contains_key("vue-tsc"));
+        assert!(reg.contains_key("vite build"));
+        assert!(reg.contains_key("vite"));
         assert!(reg.contains_key("go build"));
         assert!(reg.contains_key("ls"));
         assert!(reg.contains_key("curl"));
