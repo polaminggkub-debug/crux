@@ -104,7 +104,11 @@ fn rewrite_command(command: &str) -> Option<String> {
         remaining = rest;
     }
 
-    if changed { Some(result) } else { None }
+    if changed {
+        Some(result)
+    } else {
+        None
+    }
 }
 
 /// Find the next `&&` or `;` separator in a command string.
@@ -201,19 +205,9 @@ mod tests {
     /// Helper: assert the hook returns Some with the expected rewritten command.
     fn assert_rewritten(input: &HookInput, expected_cmd: &str) {
         let output = handle_hook(input).expect("expected Some(HookOutput)");
-        assert_eq!(
-            output.hook_specific_output.hook_event_name,
-            "PreToolUse"
-        );
-        assert_eq!(
-            output.hook_specific_output.permission_decision,
-            "allow"
-        );
-        let cmd = output
-            .hook_specific_output
-            .updated_input
-            .as_ref()
-            .unwrap()["command"]
+        assert_eq!(output.hook_specific_output.hook_event_name, "PreToolUse");
+        assert_eq!(output.hook_specific_output.permission_decision, "allow");
+        let cmd = output.hook_specific_output.updated_input.as_ref().unwrap()["command"]
             .as_str()
             .unwrap();
         assert_eq!(cmd, expected_cmd);
@@ -491,7 +485,10 @@ mod tests {
     #[test]
     fn multiple_eligible_commands_rewritten() {
         let input = make_input("Bash", "cd /p && cargo test && git status");
-        assert_rewritten(&input, "cd /p && crux run cargo test && crux run git status");
+        assert_rewritten(
+            &input,
+            "cd /p && crux run cargo test && crux run git status",
+        );
     }
 
     #[test]
@@ -512,14 +509,8 @@ mod tests {
             },
         };
         let json: serde_json::Value = serde_json::to_value(&output).unwrap();
-        assert_eq!(
-            json["hookSpecificOutput"]["hookEventName"],
-            "PreToolUse"
-        );
-        assert_eq!(
-            json["hookSpecificOutput"]["permissionDecision"],
-            "allow"
-        );
+        assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+        assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "allow");
         assert_eq!(
             json["hookSpecificOutput"]["updatedInput"]["command"],
             "crux run git status"

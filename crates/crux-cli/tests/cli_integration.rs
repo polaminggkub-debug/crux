@@ -169,8 +169,8 @@ fn run_with_builtin_git_status_compresses() {
         "Expected compressed git status, got: {stdout}"
     );
     assert!(
-        !stdout.contains("use \"git"),
-        "Hints should be stripped, got: {stdout}"
+        !stdout.contains("(use \"git restore"),
+        "Hint lines should be stripped, got: {stdout}"
     );
 }
 

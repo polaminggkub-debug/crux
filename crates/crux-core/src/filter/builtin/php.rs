@@ -12,7 +12,10 @@ pub fn register(m: &mut HashMap<&'static str, BuiltinFilterFn>) {
     m.insert("php artisan test", filter_artisan_test as BuiltinFilterFn);
 
     // Laravel Artisan
-    m.insert("php artisan migrate", filter_artisan_migrate as BuiltinFilterFn);
+    m.insert(
+        "php artisan migrate",
+        filter_artisan_migrate as BuiltinFilterFn,
+    );
     m.insert(
         "php artisan migrate:fresh",
         filter_artisan_migrate as BuiltinFilterFn,
@@ -32,19 +35,25 @@ pub fn register(m: &mut HashMap<&'static str, BuiltinFilterFn>) {
     m.insert("php artisan", filter_artisan_generic as BuiltinFilterFn);
 
     // Composer
-    m.insert("composer install", filter_composer_install as BuiltinFilterFn);
-    m.insert("composer update", filter_composer_install as BuiltinFilterFn);
-    m.insert("composer require", filter_composer_require as BuiltinFilterFn);
+    m.insert(
+        "composer install",
+        filter_composer_install as BuiltinFilterFn,
+    );
+    m.insert(
+        "composer update",
+        filter_composer_install as BuiltinFilterFn,
+    );
+    m.insert(
+        "composer require",
+        filter_composer_require as BuiltinFilterFn,
+    );
 }
 
 /// Filter PHPUnit output: keep summary line, on failure keep failure names and assertion messages.
 pub fn filter_phpunit(output: &str, exit_code: i32) -> String {
-    let summary_re =
-        Regex::new(r"(?i)^(OK \(|Tests:|FAILURES!|ERRORS!|There was|Time:)").unwrap();
-    let result_re =
-        Regex::new(r"(?i)^\s*(OK|FAILURES!|ERRORS!)\s*(\(|$)").unwrap();
-    let test_count_re =
-        Regex::new(r"(?i)^(Tests:\s*\d+|OK \(\d+ test)").unwrap();
+    let summary_re = Regex::new(r"(?i)^(OK \(|Tests:|FAILURES!|ERRORS!|There was|Time:)").unwrap();
+    let result_re = Regex::new(r"(?i)^\s*(OK|FAILURES!|ERRORS!)\s*(\(|$)").unwrap();
+    let test_count_re = Regex::new(r"(?i)^(Tests:\s*\d+|OK \(\d+ test)").unwrap();
     let fail_header_re = Regex::new(r"^\d+\)\s+\S+").unwrap();
     let assertion_re =
         Regex::new(r"(?i)(Failed assert|Expected|Actual|---\s+Expected|\+\+\+\s+Actual|PHPUnit)")
@@ -64,7 +73,16 @@ pub fn filter_phpunit(output: &str, exit_code: i32) -> String {
 
         // Progress dots (........F..E..)
         if !trimmed.is_empty()
-            && trimmed.chars().all(|c| c == '.' || c == 'F' || c == 'E' || c == 'S' || c == 'R' || c == 'I' || c == 'W' || c == ' ')
+            && trimmed.chars().all(|c| {
+                c == '.'
+                    || c == 'F'
+                    || c == 'E'
+                    || c == 'S'
+                    || c == 'R'
+                    || c == 'I'
+                    || c == 'W'
+                    || c == ' '
+            })
             && trimmed.len() > 3
         {
             continue;
@@ -125,8 +143,7 @@ pub fn filter_pest(output: &str, exit_code: i32) -> String {
     let pass_re = Regex::new(r"^\s*✓\s+").unwrap();
     let fail_re = Regex::new(r"^\s*(✗|×|FAIL)\s+").unwrap();
     let error_detail_re =
-        Regex::new(r"(?i)(Expected|Actual|Failed assert|toBe|toEqual|assert|Exception)")
-            .unwrap();
+        Regex::new(r"(?i)(Expected|Actual|Failed assert|toBe|toEqual|assert|Exception)").unwrap();
     let duration_re = Regex::new(r"^\s*Duration:?\s+[\d.]+").unwrap();
 
     let mut summary_lines = Vec::new();
@@ -204,10 +221,8 @@ pub fn filter_artisan_test(output: &str, exit_code: i32) -> String {
 /// Filter `php artisan migrate` output: keep migration names and status.
 pub fn filter_artisan_migrate(output: &str, exit_code: i32) -> String {
     let migration_re =
-        Regex::new(r"(?i)^\s*(Migrating|Migrated|Rolling back|Rolled back|INFO|WARN)\s")
-            .unwrap();
-    let table_re = Regex::new(r"(?i)(dropping|creating|dropped|created)\s+\S+\s+table")
-        .unwrap();
+        Regex::new(r"(?i)^\s*(Migrating|Migrated|Rolling back|Rolled back|INFO|WARN)\s").unwrap();
+    let table_re = Regex::new(r"(?i)(dropping|creating|dropped|created)\s+\S+\s+table").unwrap();
     let done_re = Regex::new(r"(?i)(nothing to migrate|migration complete|done)").unwrap();
     let error_re = Regex::new(r"(?i)(error|exception|failed|SQLSTATE)").unwrap();
 
@@ -220,9 +235,7 @@ pub fn filter_artisan_migrate(output: &str, exit_code: i32) -> String {
             continue;
         }
 
-        if migration_re.is_match(trimmed)
-            || table_re.is_match(trimmed)
-            || done_re.is_match(trimmed)
+        if migration_re.is_match(trimmed) || table_re.is_match(trimmed) || done_re.is_match(trimmed)
         {
             lines.push(trimmed.to_string());
             continue;
@@ -284,8 +297,7 @@ pub fn filter_artisan_migrate_status(output: &str, exit_code: i32) -> String {
 /// compress spacing.
 pub fn filter_artisan_route_list(output: &str, exit_code: i32) -> String {
     let border_re = Regex::new(r"^[\s+\-]+$").unwrap();
-    let method_re =
-        Regex::new(r"(?i)(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|ANY)").unwrap();
+    let method_re = Regex::new(r"(?i)(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|ANY)").unwrap();
     let header_re = Regex::new(r"(?i)(method|uri|name|action|middleware)").unwrap();
     let whitespace_re = Regex::new(r"\s{2,}").unwrap();
 

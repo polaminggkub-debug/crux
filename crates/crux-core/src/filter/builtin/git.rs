@@ -15,9 +15,24 @@ pub fn register(m: &mut HashMap<&'static str, BuiltinFilterFn>) {
 /// Filter git status: keep branch line and file status lines, strip hints and boilerplate.
 pub fn filter_git_status(output: &str, _exit_code: i32) -> String {
     let mut lines = Vec::new();
+    let mut in_untracked = false;
 
     for line in output.lines() {
         let trimmed = line.trim();
+
+        // Track when we enter/leave the "Untracked files:" section
+        if trimmed == "Untracked files:" {
+            in_untracked = true;
+            continue;
+        }
+        // Any other section header ends the untracked section
+        if !trimmed.is_empty()
+            && !line.starts_with('\t')
+            && !line.starts_with("  ")
+            && trimmed.ends_with(':')
+        {
+            in_untracked = false;
+        }
 
         // Keep "On branch ..." line
         if trimmed.starts_with("On branch ") {
@@ -27,14 +42,25 @@ pub fn filter_git_status(output: &str, _exit_code: i32) -> String {
 
         // Keep file status lines (M, A, D, ??, R, C, U, etc.)
         // Matches short-format lines like "M  src/lib.rs" or "?? file.txt"
-        // Also matches long-format status lines
+        // Also matches long-format status lines like "modified:   file"
         if is_status_file_line(trimmed) {
             lines.push(trimmed.to_string());
             continue;
         }
 
+        // In untracked section, indented non-hint lines are filenames
+        if in_untracked
+            && !trimmed.is_empty()
+            && (line.starts_with('\t') || line.starts_with("  "))
+            && !trimmed.starts_with('(')
+        {
+            lines.push(format!("?? {trimmed}"));
+            continue;
+        }
+
         // Keep "nothing to commit" or "Your branch is" lines
         if trimmed.starts_with("nothing to commit")
+            || trimmed.starts_with("no changes added")
             || trimmed.starts_with("Your branch is")
             || trimmed.starts_with("Your branch and")
         {
@@ -55,7 +81,14 @@ pub fn filter_git_status(output: &str, _exit_code: i32) -> String {
 fn is_status_file_line(line: &str) -> bool {
     // Short format: XY filename (e.g. "M  src/lib.rs", "?? new.txt", "AM file.rs")
     let re = Regex::new(r"^[MADRCU?! ]{1,2}\s+\S").unwrap();
-    re.is_match(line)
+    if re.is_match(line) {
+        return true;
+    }
+
+    // Long format: "modified:   file", "new file:   file", "deleted:   file", etc.
+    let long_re =
+        Regex::new(r"^(modified|new file|deleted|renamed|copied|typechange):\s+\S").unwrap();
+    long_re.is_match(line)
 }
 
 /// Filter git diff: keep file headers, stats summary, collapse large hunks.
@@ -310,6 +343,63 @@ Untracked files:
         assert!(result.contains("M  src/main.rs"));
         assert!(result.contains("?? new_file.txt"));
         assert!(!result.contains("use \"git"));
+    }
+
+    #[test]
+    fn git_status_long_format() {
+        let input = r#"On branch main
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   test.txt
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	new.txt
+
+no changes added to commit (use "git add" and/or "git commit -a")"#;
+
+        let result = filter_git_status(input, 0);
+        assert!(result.contains("On branch main"), "missing branch line");
+        assert!(
+            result.contains("modified:   test.txt"),
+            "missing modified file: got: {result}"
+        );
+        assert!(
+            result.contains("?? new.txt"),
+            "missing untracked file: got: {result}"
+        );
+        assert!(
+            result.contains("no changes added"),
+            "missing status line: got: {result}"
+        );
+        // Hint lines like '  (use "git restore..." ...)' should be stripped
+        assert!(
+            !result.contains("restore"),
+            "should not contain hint lines: got: {result}"
+        );
+        assert!(
+            !result.contains("Changes not staged"),
+            "should not contain section headers: got: {result}"
+        );
+    }
+
+    #[test]
+    fn git_status_long_format_staged() {
+        let input = r#"On branch feature
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+	new file:   src/new.rs
+	modified:   src/lib.rs
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+	deleted:    old.txt"#;
+
+        let result = filter_git_status(input, 0);
+        assert!(result.contains("new file:   src/new.rs"), "got: {result}");
+        assert!(result.contains("modified:   src/lib.rs"), "got: {result}");
+        assert!(result.contains("deleted:    old.txt"), "got: {result}");
     }
 
     #[test]

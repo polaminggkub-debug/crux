@@ -324,10 +324,7 @@ pub fn cmd_init(global: bool, codex: bool) -> Result<()> {
     let hook_dir = base_dir.join(".crux/hooks");
     std::fs::create_dir_all(&hook_dir)?;
     let hook_script_path = hook_dir.join("pre-tool-use.sh");
-    std::fs::write(
-        &hook_script_path,
-        "#!/bin/sh\nexec crux hook handle\n",
-    )?;
+    std::fs::write(&hook_script_path, "#!/bin/sh\nexec crux hook handle\n")?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -335,8 +332,8 @@ pub fn cmd_init(global: bool, codex: bool) -> Result<()> {
     }
 
     // 2. Build the crux hook entry
-    let hook_script_abs = std::fs::canonicalize(&hook_script_path)
-        .unwrap_or_else(|_| hook_script_path.clone());
+    let hook_script_abs =
+        std::fs::canonicalize(&hook_script_path).unwrap_or_else(|_| hook_script_path.clone());
     let crux_hook_entry = serde_json::json!({
         "type": "command",
         "command": hook_script_abs.to_string_lossy()
@@ -364,17 +361,19 @@ pub fn cmd_init(global: bool, codex: bool) -> Result<()> {
     };
 
     // 4. Ensure hooks.PreToolUse array exists and add crux entry
-    let obj = settings.as_object_mut().context("settings.json is not an object")?;
+    let obj = settings
+        .as_object_mut()
+        .context("settings.json is not an object")?;
 
-    let hooks = obj
-        .entry("hooks")
-        .or_insert_with(|| serde_json::json!({}));
+    let hooks = obj.entry("hooks").or_insert_with(|| serde_json::json!({}));
     let hooks_obj = hooks.as_object_mut().context("hooks is not an object")?;
 
     let pre_tool_use = hooks_obj
         .entry("PreToolUse")
         .or_insert_with(|| serde_json::json!([]));
-    let arr = pre_tool_use.as_array_mut().context("PreToolUse is not an array")?;
+    let arr = pre_tool_use
+        .as_array_mut()
+        .context("PreToolUse is not an array")?;
 
     // Remove any existing tokf or crux entries to avoid duplicates
     arr.retain(|entry| {
@@ -401,10 +400,7 @@ pub fn cmd_init(global: bool, codex: bool) -> Result<()> {
     std::fs::write(&settings_path, json_str)?;
 
     let scope = if global { "global" } else { "local" };
-    println!(
-        "crux: created hook script: {}",
-        hook_script_path.display()
-    );
+    println!("crux: created hook script: {}", hook_script_path.display());
     println!(
         "crux: installed Claude Code hook ({scope}): {}",
         settings_path.display()
