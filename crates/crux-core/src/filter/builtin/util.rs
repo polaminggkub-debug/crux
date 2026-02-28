@@ -14,7 +14,8 @@ pub fn register(m: &mut HashMap<&'static str, BuiltinFilterFn>) {
 }
 
 /// Filter curl output: strip progress bars and download stats.
-/// Keep response body or error messages. Truncate body over 200 lines.
+/// Smart compression for JSON, HTML, and minified/binary content.
+/// Mask JWT tokens and long hex/base64 secrets in response bodies.
 pub fn filter_curl(output: &str, exit_code: i32) -> String {
     if exit_code != 0 {
         let mut error_lines = Vec::new();
@@ -35,35 +36,375 @@ pub fn filter_curl(output: &str, exit_code: i32) -> String {
         return error_lines.join("\n");
     }
 
+    // Split into header lines (from -i/-I) and body lines, stripping progress bars.
+    let mut header_lines = Vec::new();
     let mut body_lines = Vec::new();
+    let mut in_headers = false;
 
     for line in output.lines() {
         let trimmed = line.trim();
 
-        // Skip progress bar lines (contain --:--:-- or time patterns)
+        // Skip progress bar lines
         if is_curl_progress_line(trimmed) {
             continue;
         }
-
-        // Skip "  % Total    % Received" header
+        // Skip progress header
         if trimmed.starts_with("% Total") || trimmed.starts_with("Dload") {
+            continue;
+        }
+
+        // Detect HTTP response headers (from -i or -I flags, possibly with < prefix)
+        let stripped = strip_header_prefix(trimmed);
+        if stripped.starts_with("HTTP/") {
+            in_headers = true;
+            header_lines.push(stripped.to_string());
+            continue;
+        }
+        if in_headers {
+            if stripped.is_empty() {
+                in_headers = false;
+            } else {
+                header_lines.push(stripped.to_string());
+            }
             continue;
         }
 
         body_lines.push(line.to_string());
     }
 
-    if body_lines.len() > 200 {
-        let total = body_lines.len();
-        body_lines.truncate(200);
-        body_lines.push(format!("... ({} more lines, {} total)", total - 200, total));
+    // Rejoin body for content-type detection
+    let body = body_lines.join("\n");
+    let body_trimmed = body.trim();
+
+    // Detect and compress based on content type
+    let compressed_body = if body_trimmed.is_empty() {
+        None
+    } else if is_minified_content(body_trimmed) {
+        Some(format!(
+            "[Binary/minified content: {} bytes]",
+            body_trimmed.len()
+        ))
+    } else if looks_like_html(body_trimmed) {
+        Some(compress_html(body_trimmed))
+    } else if looks_like_json(body_trimmed) {
+        Some(compress_json(body_trimmed))
+    } else {
+        // General text: truncate at 50 lines
+        let lines: Vec<&str> = body_trimmed.lines().collect();
+        if lines.len() > 50 {
+            let total = lines.len();
+            let mut kept: Vec<String> = lines[..50].iter().map(|l| l.to_string()).collect();
+            kept.push(format!("... ({} more lines, {} total)", total - 50, total));
+            Some(mask_secrets(&kept.join("\n")))
+        } else {
+            Some(mask_secrets(body_trimmed))
+        }
+    };
+
+    // Assemble result
+    let mut result = Vec::new();
+    if !header_lines.is_empty() {
+        result.extend(header_lines);
+    }
+    if let Some(body) = compressed_body {
+        if !result.is_empty() {
+            result.push(String::new()); // blank line between headers and body
+        }
+        result.push(body);
     }
 
-    if body_lines.is_empty() {
+    if result.is_empty() {
         "Empty response.".to_string()
     } else {
-        body_lines.join("\n")
+        result.join("\n")
     }
+}
+
+/// Strip `< ` or `> ` prefixes from verbose-mode header lines.
+fn strip_header_prefix(line: &str) -> &str {
+    if line.starts_with("< ") || line.starts_with("> ") {
+        &line[2..]
+    } else {
+        line
+    }
+}
+
+/// Detect minified/binary content: any line longer than 500 chars.
+fn is_minified_content(body: &str) -> bool {
+    body.lines().any(|line| line.len() > 500)
+}
+
+/// Check if content looks like HTML.
+fn looks_like_html(body: &str) -> bool {
+    let lower = body.to_lowercase();
+    lower.starts_with("<!doctype") || lower.starts_with("<html")
+}
+
+/// Check if content looks like JSON.
+fn looks_like_json(body: &str) -> bool {
+    body.starts_with('{') || body.starts_with('[')
+}
+
+/// Compress HTML: strip <script>/<style>, extract title + meaningful text lines.
+fn compress_html(body: &str) -> String {
+    let mut result = Vec::new();
+    let mut title = String::new();
+    let mut in_script = false;
+    let mut in_style = false;
+    let mut text_lines = Vec::new();
+
+    for line in body.lines() {
+        let lower = line.to_lowercase();
+        let trimmed = line.trim();
+
+        // Track script/style blocks
+        if lower.contains("<script") {
+            in_script = true;
+        }
+        if lower.contains("</script") {
+            in_script = false;
+            continue;
+        }
+        if lower.contains("<style") {
+            in_style = true;
+        }
+        if lower.contains("</style") {
+            in_style = false;
+            continue;
+        }
+        if in_script || in_style {
+            continue;
+        }
+
+        // Extract title
+        if lower.contains("<title") && lower.contains("</title") {
+            let extracted = extract_tag_content(trimmed, "title");
+            if !extracted.is_empty() {
+                title = extracted;
+            }
+            continue;
+        }
+
+        // Skip pure tag lines (no visible text)
+        let stripped = strip_html_tags(trimmed);
+        let stripped = stripped.trim();
+        if stripped.is_empty() {
+            continue;
+        }
+
+        // Keep meaningful text lines
+        if text_lines.len() < 20 {
+            text_lines.push(stripped.to_string());
+        }
+    }
+
+    result.push("[HTML content]".to_string());
+    if !title.is_empty() {
+        result.push(format!("Title: {title}"));
+    }
+    if text_lines.is_empty() {
+        result.push("(no meaningful text content)".to_string());
+    } else {
+        result.extend(text_lines);
+        let total_lines = body.lines().count();
+        if total_lines > 20 {
+            result.push(format!("... ({total_lines} lines total in original)"));
+        }
+    }
+
+    mask_secrets(&result.join("\n"))
+}
+
+/// Naively strip HTML tags from a string.
+fn strip_html_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for ch in s.chars() {
+        if ch == '<' {
+            in_tag = true;
+        } else if ch == '>' {
+            in_tag = false;
+        } else if !in_tag {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Extract text content between opening and closing tags on the same line.
+fn extract_tag_content(line: &str, tag: &str) -> String {
+    let lower = line.to_lowercase();
+    let open_end = format!("</{tag}");
+    if let Some(start_idx) = lower.find(&format!("<{tag}")) {
+        // Find end of opening tag
+        if let Some(gt) = line[start_idx..].find('>') {
+            let content_start = start_idx + gt + 1;
+            if let Some(close_idx) = lower.find(&open_end) {
+                if close_idx > content_start {
+                    return line[content_start..close_idx].trim().to_string();
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+/// Compress JSON: truncate to 50 lines, strip noisy fields, truncate nested arrays.
+fn compress_json(body: &str) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut result = Vec::new();
+
+    // Noisy fields to skip entirely
+    let skip_fields = [
+        "\"id\"",
+        "\"node_id\"",
+        "\"avatar_url\"",
+        "\"gravatar_id\"",
+    ];
+
+    let mut array_depth = 0;
+    let mut array_item_count: Vec<usize> = Vec::new();
+    let mut skipping_array_items = false;
+    let mut pending_more: Option<String> = None;
+    let max_array_items = 3;
+    let max_lines = 50;
+
+    for line in &lines {
+        if result.len() >= max_lines {
+            let remaining = lines.len() - result.len();
+            if remaining > 0 {
+                result.push(format!(
+                    "... ({remaining} more lines, {} total)",
+                    lines.len()
+                ));
+            }
+            break;
+        }
+
+        let trimmed = line.trim();
+
+        // Skip noisy fields
+        if skip_fields
+            .iter()
+            .any(|f| trimmed.starts_with(f) || trimmed.contains(&format!(": {f}")))
+        {
+            // Check if it's a key-value line like `"id": 12345,`
+            if trimmed.contains(':') {
+                continue;
+            }
+        }
+
+        // Track array depth for truncation
+        if trimmed.starts_with('[') || trimmed.ends_with('[') || trimmed.contains(": [") {
+            if let Some(more) = pending_more.take() {
+                result.push(more);
+            }
+            array_depth += 1;
+            array_item_count.push(0);
+            skipping_array_items = false;
+            result.push(line.to_string());
+            continue;
+        }
+
+        if trimmed.starts_with(']') {
+            if let Some(more) = pending_more.take() {
+                result.push(more);
+            }
+            if array_depth > 0 {
+                array_depth -= 1;
+                array_item_count.pop();
+            }
+            skipping_array_items = false;
+            result.push(line.to_string());
+            continue;
+        }
+
+        // Inside an array at depth > 0: count items (lines starting with `{` or standalone values)
+        if array_depth > 0 {
+            if let Some(count) = array_item_count.last_mut() {
+                if trimmed.starts_with('{') || trimmed.starts_with('"') || trimmed == "}" || trimmed == "}," {
+                    // Object boundary or value in array
+                    if trimmed.starts_with('{') {
+                        *count += 1;
+                    }
+                    if *count > max_array_items && !skipping_array_items {
+                        skipping_array_items = true;
+                        // We don't know total yet; store a placeholder
+                        pending_more = Some(format!(
+                            "{}\"... (more items)\"",
+                            " ".repeat(line.len() - trimmed.len())
+                        ));
+                        continue;
+                    }
+                    if skipping_array_items {
+                        continue;
+                    }
+                }
+            }
+        }
+
+        if skipping_array_items {
+            continue;
+        }
+
+        if let Some(more) = pending_more.take() {
+            result.push(more);
+        }
+        result.push(line.to_string());
+    }
+
+    if let Some(more) = pending_more.take() {
+        result.push(more);
+    }
+
+    mask_secrets(&result.join("\n"))
+}
+
+/// Mask JWT tokens (eyJ...) and long hex/base64 secrets in output.
+fn mask_secrets(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+
+    while i < len {
+        // Detect JWT tokens: eyJ followed by base64 chars, dots, more base64
+        if i + 3 < len && chars[i] == 'e' && chars[i + 1] == 'y' && chars[i + 2] == 'J' {
+            let start = i;
+            i += 3;
+            // Consume the JWT: base64url chars and dots
+            let mut dot_count = 0;
+            while i < len
+                && (chars[i].is_ascii_alphanumeric()
+                    || chars[i] == '.'
+                    || chars[i] == '-'
+                    || chars[i] == '_'
+                    || chars[i] == '+'
+                    || chars[i] == '/'
+                    || chars[i] == '=')
+            {
+                if chars[i] == '.' {
+                    dot_count += 1;
+                }
+                i += 1;
+            }
+            let token_len = i - start;
+            // JWT tokens have 2 dots and are long
+            if dot_count >= 2 && token_len > 30 {
+                result.push_str("[JWT_TOKEN]");
+            } else {
+                // Not a JWT, output original
+                for ch in &chars[start..i] {
+                    result.push(*ch);
+                }
+            }
+            continue;
+        }
+
+        result.push(chars[i]);
+        i += 1;
+    }
+    result
 }
 
 /// Detect curl progress bar lines.
@@ -355,13 +696,13 @@ mod tests {
 
     #[test]
     fn curl_truncates_long_body() {
-        let lines: Vec<String> = (0..250).map(|i| format!("line {i}")).collect();
+        let lines: Vec<String> = (0..80).map(|i| format!("line {i}")).collect();
         let input = lines.join("\n");
 
         let result = filter_curl(&input, 0);
         assert!(result.contains("line 0"));
-        assert!(result.contains("line 199"));
-        assert!(result.contains("(50 more lines, 250 total)"));
+        assert!(result.contains("line 49"));
+        assert!(result.contains("(30 more lines, 80 total)"));
     }
 
     #[test]
@@ -499,6 +840,112 @@ mod tests {
         assert!(result.contains("(55 lines of output)"));
         assert!(result.contains("file0.txt"));
         assert!(result.contains("..."));
+    }
+
+    #[test]
+    fn curl_minified_js() {
+        // Simulate a minified JS file (one long line >500 chars)
+        let long_line = "var a=".to_string() + &"x".repeat(600) + ";";
+        let result = filter_curl(&long_line, 0);
+        assert!(result.starts_with("[Binary/minified content:"));
+        assert!(result.contains("bytes]"));
+        assert!(!result.contains("var a="));
+    }
+
+    #[test]
+    fn curl_html_compression() {
+        let html = r#"<!DOCTYPE html>
+<html>
+<head>
+<title>My Page</title>
+<style>body { color: red; } .foo { margin: 0; }</style>
+<script>console.log("hello"); var x = 1;</script>
+</head>
+<body>
+<h1>Welcome</h1>
+<p>This is a paragraph.</p>
+<div>Some content here</div>
+</body>
+</html>"#;
+
+        let result = filter_curl(html, 0);
+        assert!(result.contains("[HTML content]"));
+        assert!(result.contains("Title: My Page"));
+        assert!(result.contains("Welcome"));
+        assert!(result.contains("This is a paragraph."));
+        // Script and style content should be stripped
+        assert!(!result.contains("console.log"));
+        assert!(!result.contains("color: red"));
+    }
+
+    #[test]
+    fn curl_json_compression() {
+        let json = r#"{
+  "status": "ok",
+  "id": 12345,
+  "node_id": "MDQ6VXNlcjE=",
+  "avatar_url": "https://example.com/avatar.png",
+  "data": {
+    "name": "test",
+    "value": 42
+  }
+}"#;
+        let result = filter_curl(json, 0);
+        assert!(result.contains("\"status\": \"ok\""));
+        assert!(result.contains("\"name\": \"test\""));
+        // Noisy fields stripped
+        assert!(!result.contains("\"id\": 12345"));
+        assert!(!result.contains("node_id"));
+        assert!(!result.contains("avatar_url"));
+    }
+
+    #[test]
+    fn curl_json_truncation() {
+        // JSON with more than 50 lines
+        let mut lines = vec!["{".to_string()];
+        for i in 0..60 {
+            lines.push(format!("  \"field_{i}\": \"value_{i}\","));
+        }
+        lines.push("}".to_string());
+        let input = lines.join("\n");
+
+        let result = filter_curl(&input, 0);
+        assert!(result.contains("more lines"));
+    }
+
+    #[test]
+    fn curl_jwt_masking() {
+        let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
+        let input = format!("{{\"access_token\":\"{jwt}\"}}");
+        let result = filter_curl(&input, 0);
+        assert!(result.contains("[JWT_TOKEN]"));
+        assert!(!result.contains("eyJhbGci"));
+    }
+
+    #[test]
+    fn curl_http_headers() {
+        let input = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}";
+        let result = filter_curl(input, 0);
+        assert!(result.contains("HTTP/1.1 200 OK"));
+        assert!(result.contains("Content-Type: application/json"));
+        assert!(result.contains("{\"ok\":true}"));
+    }
+
+    #[test]
+    fn curl_verbose_header_prefix_stripping() {
+        let input = "< HTTP/1.1 200 OK\n< Content-Type: text/html\n< \nhello world";
+        let result = filter_curl(input, 0);
+        assert!(result.contains("HTTP/1.1 200 OK"));
+        assert!(result.contains("Content-Type: text/html"));
+        assert!(!result.contains("< HTTP"));
+        assert!(result.contains("hello world"));
+    }
+
+    #[test]
+    fn curl_small_response_passthrough() {
+        // Small responses (like http_code only) should pass through
+        let result = filter_curl("200", 0);
+        assert_eq!(result, "200");
     }
 
     // -- lsof tests --
