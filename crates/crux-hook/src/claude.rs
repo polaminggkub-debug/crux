@@ -148,6 +148,11 @@ fn should_intercept(command: &str) -> bool {
         "vitest ",
         "jest ",
         "playwright ",
+        // PHP / Laravel
+        "php ",
+        "composer ",
+        "phpunit ",
+        "pest ",
         // Python
         "pytest ",
         "pip ",

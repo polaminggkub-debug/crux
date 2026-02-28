@@ -10,6 +10,7 @@ pub mod git_extra;
 pub mod golang;
 pub mod jsbuild;
 pub mod npm;
+pub mod php;
 pub mod python;
 pub mod testrunners;
 pub mod util;
@@ -31,6 +32,7 @@ static REGISTRY: LazyLock<HashMap<&'static str, BuiltinFilterFn>> = LazyLock::ne
     docker::register(&mut m);
     python::register(&mut m);
     golang::register(&mut m);
+    php::register(&mut m);
     util::register(&mut m);
     m
 });
