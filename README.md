@@ -23,7 +23,7 @@ crux run git status
 cargo install crux-cli
 ```
 
-No config needed. Works out of the box with 50+ built-in filters.
+No config needed. Works out of the box with 60+ built-in filters.
 
 ## Quick start
 
@@ -40,7 +40,7 @@ crux run git diff
 crux run docker ps
 ```
 
-## Built-in filters (50+)
+## Built-in filters (60+)
 
 Zero-config compressed output for common developer tools:
 
@@ -48,14 +48,16 @@ Zero-config compressed output for common developer tools:
 |----------|----------|
 | **Git** | status, diff, log, show, branch, commit, add, fetch, pull, push, stash |
 | **Rust** | cargo build, test, clippy, check, fmt, install |
-| **JavaScript** | npm install/test/build, tsc, eslint, prettier, jest, vitest, next build |
+| **JavaScript** | npm install/ci/test/build/audit, npm run test/dev, tsc, eslint, prettier, jest, vitest, next build |
 | **Python** | pytest, pip install, ruff, ruff check |
 | **Go** | go build, go test, golangci-lint |
-| **Docker** | ps, images, logs, compose |
+| **Docker** | ps, images, logs, compose, build, exec |
 | **GitHub CLI** | gh pr list/view/checks, issue list, run list, api |
+| **Firebase** | deploy, generic CLI |
+| **Supabase** | db diff, db push, functions deploy, status |
 | **Infrastructure** | kubectl, terraform plan, helm, make |
 | **Package managers** | npm, yarn, pnpm, pip |
-| **Utilities** | ls, find, grep, tree, cat, curl, wget, wc |
+| **Utilities** | ls, find, grep, tree, cat, curl, wget, wc, lsof, psql, env |
 
 ```sh
 # See all filters
