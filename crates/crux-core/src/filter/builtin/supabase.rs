@@ -106,10 +106,7 @@ fn is_secret_status_field(field: &str) -> bool {
 /// Check if a line is a box-drawing border (╭╮╰╯├┤─ etc.)
 fn is_box_border(line: &str) -> bool {
     let trimmed = line.trim();
-    !trimmed.is_empty()
-        && trimmed
-            .chars()
-            .all(|c| "╭╮╰╯├┤┬┴─│┼ \t".contains(c))
+    !trimmed.is_empty() && trimmed.chars().all(|c| "╭╮╰╯├┤┬┴─│┼ \t".contains(c))
 }
 
 /// Check if a line is a section header (contains emoji + title text)
@@ -235,10 +232,7 @@ pub fn filter_supabase_migration_list(output: &str, exit_code: i32) -> String {
         }
 
         // Skip table border/separator lines (─, │ only, ┼, -, +, |, etc.)
-        if trimmed
-            .chars()
-            .all(|c| "─│┼┤├┌┐└┘ \t-+|".contains(c))
-        {
+        if trimmed.chars().all(|c| "─│┼┤├┌┐└┘ \t-+|".contains(c)) {
             continue;
         }
 
@@ -576,10 +570,7 @@ supabase local development setup is running."#;
 
         // Non-secret values kept
         assert!(result.contains("Region: local"), "got: {result}");
-        assert!(
-            result.contains("Stopped services:"),
-            "status msg: {result}"
-        );
+        assert!(result.contains("Stopped services:"), "status msg: {result}");
 
         // Box drawing should be gone
         assert!(!result.contains('╭'), "got: {result}");
