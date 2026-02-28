@@ -10,6 +10,7 @@ pub fn register(m: &mut HashMap<&'static str, BuiltinFilterFn>) {
     m.insert("vitest", filter_vitest as BuiltinFilterFn);
     m.insert("jest", filter_jest as BuiltinFilterFn);
     m.insert("go test", filter_go_test as BuiltinFilterFn);
+    m.insert("playwright test", filter_playwright as BuiltinFilterFn);
 }
 
 /// Filter pytest output: keep summary line, on failure keep FAILED names and assertion errors.
@@ -230,6 +231,136 @@ pub fn filter_jest(output: &str, exit_code: i32) -> String {
         for line in &summary_lines {
             parts.push(line.clone());
         }
+    } else if exit_code == 0 {
+        parts.push("All tests passed.".to_string());
+    } else {
+        parts.push(format!("Tests failed (exit code {exit_code})."));
+    }
+
+    parts.join("\n")
+}
+
+/// Filter Playwright test output: keep summary line and failure details.
+/// Drops setup logs, ANSI codes, duplicate output blocks, and passing test lines.
+pub fn filter_playwright(output: &str, exit_code: i32) -> String {
+    let ansi_re = Regex::new(r"\x1b\[[0-9;]*m").unwrap();
+    let clean = ansi_re.replace_all(output, "");
+
+    // Playwright sometimes duplicates output (setup + actual run). Detect and use only last block.
+    let blocks: Vec<&str> = clean.split("Running ").collect();
+    let working = if blocks.len() > 2 {
+        // Use the last "Running N tests..." block
+        format!("Running {}", blocks[blocks.len() - 1])
+    } else {
+        clean.to_string()
+    };
+
+    let summary_re = Regex::new(r"^\s*\d+\s+(failed|passed)").unwrap();
+    let total_re = Regex::new(r"^\s*\d+\s+passed\s+\([\d.]+s\)").unwrap();
+    let fail_header_re = Regex::new(r"^\s*\d+\)\s+\[").unwrap();
+    let fail_count_re = Regex::new(r"^\s*(\d+)\s+failed").unwrap();
+    let pass_count_re = Regex::new(r"^\s*(\d+)\s+passed").unwrap();
+    let setup_re = Regex::new(r"^\[E2E Setup\]|^\s*$").unwrap();
+    let test_line_re = Regex::new(r"^\s*[✓✘·◌○]\s+\d+\s+\[").unwrap();
+
+    let mut summary_parts = Vec::new();
+    let mut failure_sections: Vec<Vec<String>> = Vec::new();
+    let mut current_failure: Vec<String> = Vec::new();
+    let mut in_failure = false;
+    let mut total_line = String::new();
+
+    for line in working.lines() {
+        let trimmed = line.trim();
+
+        // Skip setup and blank lines
+        if setup_re.is_match(trimmed) {
+            continue;
+        }
+
+        // "Running N tests using M workers"
+        if trimmed.starts_with("Running ") && trimmed.contains(" tests") {
+            continue;
+        }
+
+        // Passing/failing test lines (✓ / ✘) — skip unless failing
+        if test_line_re.is_match(trimmed) {
+            continue;
+        }
+
+        // Summary counts like "1 failed", "8 passed", or "8 passed (15.7s)"
+        if summary_re.is_match(trimmed) {
+            summary_parts.push(trimmed.to_string());
+            if total_re.is_match(trimmed) {
+                total_line = trimmed.to_string();
+            }
+            continue;
+        }
+
+        // Failure header: "1) [project] › file:line › ..."
+        if fail_header_re.is_match(trimmed) {
+            if in_failure && !current_failure.is_empty() {
+                failure_sections.push(current_failure.clone());
+            }
+            current_failure = vec![trimmed.to_string()];
+            in_failure = true;
+            continue;
+        }
+
+        // Inside a failure block, capture error details
+        if in_failure
+            && (trimmed.starts_with("Error:")
+                || trimmed.contains("expect(")
+                || trimmed.contains("toEqual")
+                || trimmed.contains("toBe")
+                || trimmed.contains("Expected")
+                || trimmed.contains("Received")
+                || trimmed.starts_with("- Expected")
+                || trimmed.starts_with("+ Received")
+                || trimmed.starts_with("> ")
+                || trimmed.starts_with("at ")
+                || (trimmed.contains("Error") && trimmed.contains(":")))
+        {
+            current_failure.push(format!("  {trimmed}"));
+        }
+    }
+
+    // Flush last failure
+    if !current_failure.is_empty() {
+        failure_sections.push(current_failure);
+    }
+
+    // Build output
+    let mut parts = Vec::new();
+
+    // Failure details
+    if exit_code != 0 && !failure_sections.is_empty() {
+        parts.push("Failures:".to_string());
+        for section in &failure_sections {
+            for line in section {
+                parts.push(line.clone());
+            }
+        }
+        parts.push(String::new());
+    }
+
+    // Summary: construct from parts or use total_line
+    let mut fail_count = 0;
+    let mut pass_count = 0;
+    for part in &summary_parts {
+        if let Some(caps) = fail_count_re.captures(part) {
+            fail_count = caps[1].parse::<u32>().unwrap_or(0);
+        }
+        if let Some(caps) = pass_count_re.captures(part) {
+            pass_count = caps[1].parse::<u32>().unwrap_or(0);
+        }
+    }
+
+    if fail_count > 0 {
+        parts.push(format!("{fail_count} failed, {pass_count} passed"));
+    } else if !total_line.is_empty() {
+        parts.push(total_line);
+    } else if pass_count > 0 {
+        parts.push(format!("{pass_count} passed"));
     } else if exit_code == 0 {
         parts.push("All tests passed.".to_string());
     } else {

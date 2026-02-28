@@ -314,6 +314,39 @@ pub fn cmd_init(global: bool, codex: bool) -> Result<()> {
         return crux_hook::codex::install_codex_skill();
     }
 
+    let base_dir = if global {
+        home_dir().context("cannot determine home directory")?
+    } else {
+        PathBuf::from(".")
+    };
+
+    // 1. Create the hook shim script
+    let hook_dir = base_dir.join(".crux/hooks");
+    std::fs::create_dir_all(&hook_dir)?;
+    let hook_script_path = hook_dir.join("pre-tool-use.sh");
+    std::fs::write(
+        &hook_script_path,
+        "#!/bin/sh\nexec crux hook handle\n",
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook_script_path, std::fs::Permissions::from_mode(0o755))?;
+    }
+
+    // 2. Build the crux hook entry
+    let hook_script_abs = std::fs::canonicalize(&hook_script_path)
+        .unwrap_or_else(|_| hook_script_path.clone());
+    let crux_hook_entry = serde_json::json!({
+        "type": "command",
+        "command": hook_script_abs.to_string_lossy()
+    });
+    let crux_matcher_entry = serde_json::json!({
+        "matcher": "Bash",
+        "hooks": [crux_hook_entry]
+    });
+
+    // 3. Read or create settings.json
     let settings_path = if global {
         home_dir()
             .context("cannot determine home directory")?
@@ -322,34 +355,56 @@ pub fn cmd_init(global: bool, codex: bool) -> Result<()> {
         PathBuf::from(".claude/settings.json")
     };
 
-    let hook_value = serde_json::json!({
-        "hooks": {
-            "command_output": "crux run"
+    let mut settings: serde_json::Value = if settings_path.exists() {
+        let contents =
+            std::fs::read_to_string(&settings_path).context("reading existing settings.json")?;
+        serde_json::from_str(&contents).context("parsing settings.json")?
+    } else {
+        serde_json::json!({})
+    };
+
+    // 4. Ensure hooks.PreToolUse array exists and add crux entry
+    let obj = settings.as_object_mut().context("settings.json is not an object")?;
+
+    let hooks = obj
+        .entry("hooks")
+        .or_insert_with(|| serde_json::json!({}));
+    let hooks_obj = hooks.as_object_mut().context("hooks is not an object")?;
+
+    let pre_tool_use = hooks_obj
+        .entry("PreToolUse")
+        .or_insert_with(|| serde_json::json!([]));
+    let arr = pre_tool_use.as_array_mut().context("PreToolUse is not an array")?;
+
+    // Remove any existing tokf or crux entries to avoid duplicates
+    arr.retain(|entry| {
+        if let Some(hooks_list) = entry.get("hooks").and_then(|h| h.as_array()) {
+            !hooks_list.iter().any(|h| {
+                h.get("command")
+                    .and_then(|c| c.as_str())
+                    .map(|c| c.contains("tokf") || c.contains("crux"))
+                    .unwrap_or(false)
+            })
+        } else {
+            true
         }
     });
 
-    let merged = if settings_path.exists() {
-        let contents =
-            std::fs::read_to_string(&settings_path).context("reading existing settings.json")?;
-        let mut existing: serde_json::Value =
-            serde_json::from_str(&contents).context("parsing settings.json")?;
-        if let Some(obj) = existing.as_object_mut() {
-            if let Some(hooks_val) = hook_value.get("hooks") {
-                obj.insert("hooks".to_string(), hooks_val.clone());
-            }
-        }
-        existing
-    } else {
-        hook_value
-    };
+    // Add the crux entry
+    arr.push(crux_matcher_entry);
 
+    // 5. Write settings.json
     if let Some(parent) = settings_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let json_str = serde_json::to_string_pretty(&merged)?;
+    let json_str = serde_json::to_string_pretty(&settings)?;
     std::fs::write(&settings_path, json_str)?;
 
     let scope = if global { "global" } else { "local" };
+    println!(
+        "crux: created hook script: {}",
+        hook_script_path.display()
+    );
     println!(
         "crux: installed Claude Code hook ({scope}): {}",
         settings_path.display()

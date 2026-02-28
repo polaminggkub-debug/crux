@@ -58,7 +58,20 @@ pub fn resolve_filter(command: &[String]) -> Option<FilterConfig> {
         }
     }
 
-    find_best_match(&candidates, command)
+    // Try original command first
+    if let Some(result) = find_best_match(&candidates, command) {
+        return Some(result);
+    }
+
+    // Strip runner prefixes (npx, bunx, pnpx) and retry
+    if command.len() >= 2 {
+        let runner = command[0].as_str();
+        if matches!(runner, "npx" | "bunx" | "pnpx") {
+            return find_best_match(&candidates, &command[1..]);
+        }
+    }
+
+    None
 }
 
 /// Build the full command string from tokens for matching.

@@ -1,28 +1,37 @@
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+/// Input from Claude Code's PreToolUse hook (stdin JSON).
+/// Extra fields like `session_id`, `hook_event_name` are ignored.
 #[derive(Debug, Deserialize)]
 pub struct HookInput {
     pub tool_name: String,
+    #[serde(default)]
     pub tool_input: serde_json::Value,
 }
 
+/// Output to Claude Code (stdout JSON) — only emitted when rewriting.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HookOutput {
-    pub result: String,
+    pub hook_specific_output: HookSpecificOutput,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookSpecificOutput {
+    pub hook_event_name: String,
+    pub permission_decision: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_input: Option<serde_json::Value>,
+    pub updated_input: Option<serde_json::Value>,
 }
 
 /// Process a Claude Code PreToolUse hook call.
-/// If the tool is "Bash" and the command could benefit from crux,
-/// rewrite it to go through `crux run`.
-pub fn handle_hook(input: &HookInput) -> Result<HookOutput> {
+///
+/// Returns `None` for passthrough (caller prints nothing, exits 0).
+/// Returns `Some(HookOutput)` when rewriting the command through crux.
+pub fn handle_hook(input: &HookInput) -> Option<HookOutput> {
     if input.tool_name != "Bash" {
-        return Ok(HookOutput {
-            result: "approve".into(),
-            tool_input: None,
-        });
+        return None;
     }
 
     let command = input
@@ -31,20 +40,21 @@ pub fn handle_hook(input: &HookInput) -> Result<HookOutput> {
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    if should_intercept(command) {
-        let new_command = format!("crux run {command}");
-        let mut new_input = input.tool_input.clone();
-        new_input["command"] = serde_json::Value::String(new_command);
-        Ok(HookOutput {
-            result: "modify".into(),
-            tool_input: Some(new_input),
-        })
-    } else {
-        Ok(HookOutput {
-            result: "approve".into(),
-            tool_input: None,
-        })
+    if !should_intercept(command) {
+        return None;
     }
+
+    let new_command = format!("crux run {command}");
+    let mut new_input = input.tool_input.clone();
+    new_input["command"] = serde_json::Value::String(new_command);
+
+    Some(HookOutput {
+        hook_specific_output: HookSpecificOutput {
+            hook_event_name: "PreToolUse".into(),
+            permission_decision: "allow".into(),
+            updated_input: Some(new_input),
+        },
+    })
 }
 
 /// Check if a command should be intercepted by crux.
@@ -72,6 +82,7 @@ fn should_intercept(command: &str) -> bool {
         "prettier ",
         "vitest ",
         "jest ",
+        "playwright ",
         // Python
         "pytest ",
         "pip ",
@@ -117,309 +128,306 @@ mod tests {
         }
     }
 
+    /// Helper: assert the hook returns Some with the expected rewritten command.
+    fn assert_rewritten(input: &HookInput, expected_cmd: &str) {
+        let output = handle_hook(input).expect("expected Some(HookOutput)");
+        assert_eq!(
+            output.hook_specific_output.hook_event_name,
+            "PreToolUse"
+        );
+        assert_eq!(
+            output.hook_specific_output.permission_decision,
+            "allow"
+        );
+        let cmd = output
+            .hook_specific_output
+            .updated_input
+            .as_ref()
+            .unwrap()["command"]
+            .as_str()
+            .unwrap();
+        assert_eq!(cmd, expected_cmd);
+    }
+
+    /// Helper: assert the hook returns None (silent passthrough).
+    fn assert_passthrough(input: &HookInput) {
+        assert!(
+            handle_hook(input).is_none(),
+            "expected None (passthrough), got Some"
+        );
+    }
+
+    // -- Passthrough cases --
+
     #[test]
-    fn non_bash_tool_approved() {
+    fn non_bash_tool_passthrough() {
         let input = make_input("Read", "/some/file");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "approve");
-        assert!(output.tool_input.is_none());
+        assert_passthrough(&input);
     }
 
     #[test]
-    fn git_command_intercepted() {
-        let input = make_input("Bash", "git status");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
-        let new_cmd = output.tool_input.unwrap()["command"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert_eq!(new_cmd, "crux run git status");
-    }
-
-    #[test]
-    fn cargo_command_intercepted() {
-        let input = make_input("Bash", "cargo test --release");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
-        let new_cmd = output.tool_input.unwrap()["command"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert_eq!(new_cmd, "crux run cargo test --release");
-    }
-
-    #[test]
-    fn unknown_command_approved() {
+    fn unknown_command_passthrough() {
         let input = make_input("Bash", "python script.py");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "approve");
-        assert!(output.tool_input.is_none());
+        assert_passthrough(&input);
     }
 
     #[test]
-    fn already_crux_not_double_wrapped() {
+    fn already_crux_passthrough() {
         let input = make_input("Bash", "crux run git status");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "approve");
-        assert!(output.tool_input.is_none());
+        assert_passthrough(&input);
     }
 
     #[test]
-    fn docker_command_intercepted() {
-        let input = make_input("Bash", "docker ps");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
-    }
-
-    #[test]
-    fn npm_command_intercepted() {
-        let input = make_input("Bash", "npm test");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
-    }
-
-    #[test]
-    fn empty_command_approved() {
+    fn empty_command_passthrough() {
         let input = make_input("Bash", "");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "approve");
-        assert!(output.tool_input.is_none());
+        assert_passthrough(&input);
     }
 
     #[test]
-    fn missing_command_field_approved() {
+    fn missing_command_field_passthrough() {
         let input = HookInput {
             tool_name: "Bash".to_string(),
             tool_input: json!({}),
         };
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "approve");
+        assert_passthrough(&input);
+    }
+
+    // -- Deserialization of full Claude Code input --
+
+    #[test]
+    fn deserialize_full_claude_input() {
+        let raw = r#"{"session_id":"abc","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git status"}}"#;
+        let input: HookInput = serde_json::from_str(raw).unwrap();
+        assert_eq!(input.tool_name, "Bash");
+        assert_eq!(input.tool_input["command"], "git status");
+    }
+
+    // -- Rewrite cases --
+
+    #[test]
+    fn git_command_rewritten() {
+        let input = make_input("Bash", "git status");
+        assert_rewritten(&input, "crux run git status");
+    }
+
+    #[test]
+    fn cargo_command_rewritten() {
+        let input = make_input("Bash", "cargo test --release");
+        assert_rewritten(&input, "crux run cargo test --release");
+    }
+
+    #[test]
+    fn docker_command_rewritten() {
+        let input = make_input("Bash", "docker ps");
+        assert_rewritten(&input, "crux run docker ps");
+    }
+
+    #[test]
+    fn npm_command_rewritten() {
+        let input = make_input("Bash", "npm test");
+        assert_rewritten(&input, "crux run npm test");
     }
 
     // -- Test runners --
 
     #[test]
-    fn pytest_command_intercepted() {
+    fn pytest_command_rewritten() {
         let input = make_input("Bash", "pytest --verbose");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
-        let new_cmd = output.tool_input.unwrap()["command"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert_eq!(new_cmd, "crux run pytest --verbose");
+        assert_rewritten(&input, "crux run pytest --verbose");
     }
 
     #[test]
-    fn vitest_command_intercepted() {
+    fn vitest_command_rewritten() {
         let input = make_input("Bash", "vitest run");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run vitest run");
     }
 
     #[test]
-    fn jest_command_intercepted() {
+    fn jest_command_rewritten() {
         let input = make_input("Bash", "jest --coverage");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run jest --coverage");
     }
 
     // -- JS build tools --
 
     #[test]
-    fn tsc_command_intercepted() {
+    fn tsc_command_rewritten() {
         let input = make_input("Bash", "tsc --noEmit");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run tsc --noEmit");
     }
 
     #[test]
-    fn eslint_command_intercepted() {
+    fn eslint_command_rewritten() {
         let input = make_input("Bash", "eslint src/");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run eslint src/");
     }
 
     #[test]
-    fn prettier_command_intercepted() {
+    fn prettier_command_rewritten() {
         let input = make_input("Bash", "prettier --check .");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run prettier --check .");
     }
 
     #[test]
-    fn next_command_intercepted() {
+    fn next_command_rewritten() {
         let input = make_input("Bash", "next build");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
-        let new_cmd = output.tool_input.unwrap()["command"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert_eq!(new_cmd, "crux run next build");
+        assert_rewritten(&input, "crux run next build");
     }
 
     // -- Python tools --
 
     #[test]
-    fn pip_command_intercepted() {
+    fn pip_command_rewritten() {
         let input = make_input("Bash", "pip install requests");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run pip install requests");
     }
 
     #[test]
-    fn ruff_command_intercepted() {
+    fn ruff_command_rewritten() {
         let input = make_input("Bash", "ruff check src/");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
-        let new_cmd = output.tool_input.unwrap()["command"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert_eq!(new_cmd, "crux run ruff check src/");
+        assert_rewritten(&input, "crux run ruff check src/");
     }
 
     // -- Go tools --
 
     #[test]
-    fn golangci_lint_command_intercepted() {
+    fn golangci_lint_command_rewritten() {
         let input = make_input("Bash", "golangci-lint run");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run golangci-lint run");
     }
 
     // -- Infrastructure & ops --
 
     #[test]
-    fn terraform_command_intercepted() {
+    fn terraform_command_rewritten() {
         let input = make_input("Bash", "terraform plan");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
-        let new_cmd = output.tool_input.unwrap()["command"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert_eq!(new_cmd, "crux run terraform plan");
+        assert_rewritten(&input, "crux run terraform plan");
     }
 
     #[test]
-    fn helm_command_intercepted() {
+    fn helm_command_rewritten() {
         let input = make_input("Bash", "helm install my-release chart/");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run helm install my-release chart/");
     }
 
     #[test]
-    fn ansible_command_intercepted() {
+    fn ansible_command_rewritten() {
         let input = make_input("Bash", "ansible playbook.yml");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run ansible playbook.yml");
     }
 
     #[test]
-    fn ssh_command_intercepted() {
+    fn ssh_command_rewritten() {
         let input = make_input("Bash", "ssh user@host ls");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run ssh user@host ls");
     }
 
     // -- Build systems --
 
     #[test]
-    fn make_command_intercepted() {
+    fn make_command_rewritten() {
         let input = make_input("Bash", "make build");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
-        let new_cmd = output.tool_input.unwrap()["command"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert_eq!(new_cmd, "crux run make build");
+        assert_rewritten(&input, "crux run make build");
     }
 
     #[test]
-    fn mvn_command_intercepted() {
+    fn mvn_command_rewritten() {
         let input = make_input("Bash", "mvn clean install");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run mvn clean install");
     }
 
     #[test]
-    fn rustc_command_intercepted() {
+    fn rustc_command_rewritten() {
         let input = make_input("Bash", "rustc --edition 2021 main.rs");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run rustc --edition 2021 main.rs");
     }
 
     // -- Filesystem & utilities --
 
     #[test]
-    fn ls_command_intercepted() {
+    fn ls_command_rewritten() {
         let input = make_input("Bash", "ls -la");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run ls -la");
     }
 
     #[test]
-    fn find_command_intercepted() {
+    fn find_command_rewritten() {
         let input = make_input("Bash", "find . -name '*.rs'");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run find . -name '*.rs'");
     }
 
     #[test]
-    fn grep_command_intercepted() {
+    fn grep_command_rewritten() {
         let input = make_input("Bash", "grep -r TODO src/");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run grep -r TODO src/");
     }
 
     #[test]
-    fn tree_command_intercepted() {
+    fn tree_command_rewritten() {
         let input = make_input("Bash", "tree -L 2");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run tree -L 2");
     }
 
     #[test]
-    fn cat_command_intercepted() {
+    fn cat_command_rewritten() {
         let input = make_input("Bash", "cat README.md");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run cat README.md");
     }
 
     #[test]
-    fn curl_command_intercepted() {
+    fn curl_command_rewritten() {
         let input = make_input("Bash", "curl -s https://api.example.com");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run curl -s https://api.example.com");
     }
 
     #[test]
-    fn wget_command_intercepted() {
+    fn wget_command_rewritten() {
         let input = make_input("Bash", "wget https://example.com/file.tar.gz");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run wget https://example.com/file.tar.gz");
     }
 
     #[test]
-    fn wc_command_intercepted() {
+    fn wc_command_rewritten() {
         let input = make_input("Bash", "wc -l src/*.rs");
-        let output = handle_hook(&input).unwrap();
-        assert_eq!(output.result, "modify");
+        assert_rewritten(&input, "crux run wc -l src/*.rs");
     }
 
-    // -- Serialization --
+    // -- Serialization format --
 
     #[test]
-    fn serialization_skip_none() {
+    fn output_serializes_to_correct_format() {
         let output = HookOutput {
-            result: "approve".into(),
-            tool_input: None,
+            hook_specific_output: HookSpecificOutput {
+                hook_event_name: "PreToolUse".into(),
+                permission_decision: "allow".into(),
+                updated_input: Some(json!({ "command": "crux run git status" })),
+            },
         };
-        let json = serde_json::to_string(&output).unwrap();
-        assert!(!json.contains("tool_input"));
+        let json: serde_json::Value = serde_json::to_value(&output).unwrap();
+        assert_eq!(
+            json["hookSpecificOutput"]["hookEventName"],
+            "PreToolUse"
+        );
+        assert_eq!(
+            json["hookSpecificOutput"]["permissionDecision"],
+            "allow"
+        );
+        assert_eq!(
+            json["hookSpecificOutput"]["updatedInput"]["command"],
+            "crux run git status"
+        );
+    }
+
+    #[test]
+    fn output_skips_updated_input_when_none() {
+        let output = HookOutput {
+            hook_specific_output: HookSpecificOutput {
+                hook_event_name: "PreToolUse".into(),
+                permission_decision: "allow".into(),
+                updated_input: None,
+            },
+        };
+        let json_str = serde_json::to_string(&output).unwrap();
+        assert!(!json_str.contains("updatedInput"));
     }
 }

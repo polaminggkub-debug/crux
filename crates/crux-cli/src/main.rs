@@ -2,6 +2,7 @@ mod commands;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::io::Read;
 use std::time::Instant;
 
 #[derive(Parser)]
@@ -73,6 +74,17 @@ enum Commands {
     },
     /// Run diagnostic checks on your crux installation
     Doctor,
+    /// Agent hook management
+    Hook {
+        #[command(subcommand)]
+        command: HookCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum HookCommand {
+    /// Process Claude Code PreToolUse hook from stdin
+    Handle,
 }
 
 fn main() {
@@ -93,6 +105,9 @@ fn main() {
         Commands::Test { command } => commands::cmd_test(&command),
         Commands::Log { command } => commands::cmd_log(&command),
         Commands::Doctor => commands::cmd_doctor(),
+        Commands::Hook { command } => match command {
+            HookCommand::Handle => cmd_hook_handle(),
+        },
     };
 
     if let Err(e) = result {
@@ -343,4 +358,25 @@ fn truncate_str(s: &str, max: usize) -> String {
     } else {
         format!("{}…", &s[..max - 1])
     }
+}
+
+// ---------------------------------------------------------------------------
+// Hook handle — process Claude Code PreToolUse hook from stdin
+// ---------------------------------------------------------------------------
+
+fn cmd_hook_handle() -> Result<()> {
+    // Read all of stdin
+    let mut input_str = String::new();
+    std::io::stdin().read_to_string(&mut input_str).ok();
+
+    // Parse and handle — silent on any error (never block Claude Code)
+    if let Ok(input) = serde_json::from_str::<crux_hook::claude::HookInput>(&input_str) {
+        if let Some(output) = crux_hook::claude::handle_hook(&input) {
+            if let Ok(json) = serde_json::to_string(&output) {
+                println!("{json}");
+            }
+        }
+    }
+
+    Ok(())
 }
