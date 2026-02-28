@@ -233,24 +233,13 @@ pub fn filter_lsof(output: &str, _exit_code: i32) -> String {
         }
         // lsof fields: COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME...
         // NAME is always the last field and may contain spaces (e.g., "*:5174 (LISTEN)").
-        let fields: Vec<&str> = line
-            .splitn(10, char::is_whitespace)
-            .filter(|f| !f.is_empty())
-            .collect();
-        if fields.len() < 2 {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 9 {
             continue;
         }
         let command = fields[0];
         let pid = fields[1];
-        // NAME is everything from field index 8 onwards (9th whitespace-separated token).
-        // If the line has fewer than 9 fields, take the last available field.
-        let name = if fields.len() >= 9 {
-            // Re-split without limit to get remaining fields joined.
-            let all: Vec<&str> = line.split_whitespace().collect();
-            all[8..].join(" ")
-        } else {
-            fields.last().unwrap_or(&"").to_string()
-        };
+        let name = fields[8..].join(" ");
         result.push(format!("{command}  {pid}  {name}"));
     }
 

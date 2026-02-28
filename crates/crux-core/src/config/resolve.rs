@@ -93,10 +93,11 @@ fn match_score(filter_command: &str, input_command: &str) -> Option<usize> {
     }
 
     // Prefix match: "git" matches "git status", "git diff", etc.
-    if input_cmd.starts_with(filter_cmd)
-        && input_cmd[filter_cmd.len()..].starts_with(char::is_whitespace)
-    {
-        return Some(filter_cmd.split_whitespace().count() * 100);
+    // Also match colon separators for npm scripts: "npm run test" matches "npm run test:unit"
+    if let Some(rest) = input_cmd.strip_prefix(filter_cmd) {
+        if rest.starts_with(char::is_whitespace) || rest.starts_with(':') {
+            return Some(filter_cmd.split_whitespace().count() * 100);
+        }
     }
 
     None
@@ -348,5 +349,18 @@ mod tests {
     #[test]
     fn match_score_prefix() {
         assert_eq!(match_score("git", "git status"), Some(100));
+    }
+
+    #[test]
+    fn match_score_colon_separator() {
+        // "npm run test" should match "npm run test:unit" via colon prefix
+        assert_eq!(match_score("npm run test", "npm run test:unit"), Some(300));
+        assert_eq!(match_score("npm run test", "npm run test:e2e"), Some(300));
+    }
+
+    #[test]
+    fn match_score_no_colon_partial() {
+        // "npm run tes" should NOT match "npm run test:unit"
+        assert!(match_score("npm run tes", "npm run test:unit").is_none());
     }
 }
