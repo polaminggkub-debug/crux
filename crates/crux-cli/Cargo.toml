@@ -11,9 +11,9 @@ name = "crux"
 path = "src/main.rs"
 
 [dependencies]
-crux_core = { package = "cruxai-core", path = "../crux-core", version = "0.3.1" }
-crux_hook = { package = "cruxai-hook", path = "../crux-hook", version = "0.3.1" }
-crux_tracking = { package = "cruxai-tracking", path = "../crux-tracking", version = "0.3.1", optional = true }
+crux_core = { package = "cruxai-core", path = "../crux-core", version = "0.3.2" }
+crux_hook = { package = "cruxai-hook", path = "../crux-hook", version = "0.3.2" }
+crux_tracking = { package = "cruxai-tracking", path = "../crux-tracking", version = "0.3.2", optional = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 toml = { workspace = true }
