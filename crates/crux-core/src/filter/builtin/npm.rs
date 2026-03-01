@@ -13,6 +13,14 @@ pub fn register(m: &mut HashMap<&'static str, BuiltinFilterFn>) {
     m.insert("npm audit", filter_npm_audit as BuiltinFilterFn);
     m.insert("npm run test", filter_npm_test as BuiltinFilterFn);
     m.insert("npm run dev", filter_npm_run_dev as BuiltinFilterFn);
+    m.insert(
+        "npm run lint",
+        super::jsbuild::filter_eslint as BuiltinFilterFn,
+    );
+    m.insert(
+        "npm run e2e",
+        super::testrunners::filter_playwright as BuiltinFilterFn,
+    );
     m.insert("npm ls", filter_npm_ls as BuiltinFilterFn);
     m.insert("npm list", filter_npm_ls as BuiltinFilterFn);
     m.insert("pnpm ls", filter_npm_ls as BuiltinFilterFn);
@@ -681,5 +689,45 @@ npm ERR! code ELIFECYCLE";
         let result = filter_npm_run_dev(input, 1);
         assert!(result.contains("Error:"));
         assert!(result.contains("npm ERR!"));
+    }
+
+    // --- npm run lint → eslint filter ---
+
+    #[test]
+    fn npm_run_lint_uses_eslint_filter() {
+        let reg = super::super::registry();
+        let lint_fn = reg
+            .get("npm run lint")
+            .expect("npm run lint should be registered");
+        let result = lint_fn("", 0);
+        assert_eq!(result, "No lint errors.");
+    }
+
+    #[test]
+    fn npm_run_lint_shows_errors() {
+        let reg = super::super::registry();
+        let lint_fn = reg.get("npm run lint").unwrap();
+        let input = "\
+/src/app.ts
+  3:10  error  Unexpected console statement  no-console
+
+\u{2716} 1 problem (1 error, 0 warnings)";
+        let result = lint_fn(input, 1);
+        assert!(result.contains("/src/app.ts"));
+        assert!(result.contains("3:10  error"));
+        assert!(result.contains("1 problem"));
+    }
+
+    // --- npm run e2e → playwright filter ---
+
+    #[test]
+    fn npm_run_e2e_uses_playwright_filter() {
+        let reg = super::super::registry();
+        let e2e_fn = reg
+            .get("npm run e2e")
+            .expect("npm run e2e should be registered");
+        let result = e2e_fn("", 0);
+        // playwright filter on empty success
+        assert!(!result.is_empty());
     }
 }

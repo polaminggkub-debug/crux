@@ -13,6 +13,7 @@ pub fn register(m: &mut HashMap<&'static str, BuiltinFilterFn>) {
     m.insert("git fetch", filter_git_fetch as BuiltinFilterFn);
     m.insert("git pull", filter_git_pull as BuiltinFilterFn);
     m.insert("git stash", filter_git_stash as BuiltinFilterFn);
+    m.insert("git", filter_git_generic as BuiltinFilterFn);
 }
 
 /// Filter git show: keep commit metadata and diffstat, summarize diff body.
@@ -262,6 +263,58 @@ fn filter_git_pull(output: &str, _exit_code: i32) -> String {
 
     if lines.is_empty() {
         "Pull completed.".to_string()
+    } else {
+        lines.join("\n")
+    }
+}
+
+/// Filter generic git subcommands (catch-all): strip ANSI, drop hint/tip lines,
+/// keep error/fatal/warning lines, collapse blank lines.
+/// Covers: merge, rebase, cherry-pick, tag, remote, reset, checkout, switch, clone, blame, bisect.
+fn filter_git_generic(output: &str, exit_code: i32) -> String {
+    let ansi_re = Regex::new(r"\x1b\[[0-9;]*m").unwrap();
+    let hint_re = Regex::new(r#"^\s*(hint:|tip:|use "git )"#).unwrap();
+
+    let mut lines = Vec::new();
+    let mut prev_blank = false;
+
+    for line in output.lines() {
+        // Strip ANSI escape codes
+        let clean = ansi_re.replace_all(line, "");
+        let trimmed = clean.trim();
+
+        // Collapse consecutive blank lines
+        if trimmed.is_empty() {
+            if !prev_blank && !lines.is_empty() {
+                prev_blank = true;
+            }
+            continue;
+        }
+
+        // Drop hint/tip lines
+        if hint_re.is_match(trimmed) {
+            continue;
+        }
+
+        if prev_blank {
+            lines.push(String::new());
+            prev_blank = false;
+        }
+
+        lines.push(trimmed.to_string());
+    }
+
+    // Remove trailing blank lines
+    while lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+
+    if lines.is_empty() {
+        if exit_code != 0 {
+            format!("Command failed (exit code {exit_code}).")
+        } else {
+            "OK.".to_string()
+        }
     } else {
         lines.join("\n")
     }
@@ -553,5 +606,81 @@ mod tests {
         assert!(result.contains("Saved working directory"));
         assert!(!result.contains("diff --git"));
         assert!(!result.contains("+added"));
+    }
+
+    // -- git generic (catch-all) tests --
+
+    #[test]
+    fn git_generic_merge_output() {
+        let input = "Updating abc1234..def5678\n\
+Fast-forward\n\
+ src/lib.rs | 5 ++---\n\
+ 1 file changed, 2 insertions(+), 3 deletions(-)\n\
+hint: use 'git log' to see the changes";
+        let result = filter_git_generic(input, 0);
+        assert!(result.contains("Updating abc1234..def5678"));
+        assert!(result.contains("Fast-forward"));
+        assert!(result.contains("1 file changed"));
+        assert!(!result.contains("hint:"));
+    }
+
+    #[test]
+    fn git_generic_rebase_output() {
+        let input = "\
+Successfully rebased and updated refs/heads/main.
+hint: use --hierarchical to view refs.
+tip: Try 'git rebase --continue' if you're stuck.";
+        let result = filter_git_generic(input, 0);
+        assert!(result.contains("Successfully rebased"));
+        assert!(!result.contains("hint:"));
+        assert!(!result.contains("tip:"));
+    }
+
+    #[test]
+    fn git_generic_strips_ansi() {
+        let input = "\x1b[32mAlready up to date.\x1b[0m\n\x1b[31merror: something\x1b[0m";
+        let result = filter_git_generic(input, 1);
+        assert!(result.contains("Already up to date."));
+        assert!(result.contains("error: something"));
+        assert!(!result.contains("\x1b["));
+    }
+
+    #[test]
+    fn git_generic_collapses_blanks() {
+        let input = "line one\n\n\n\nline two\n\n\nline three";
+        let result = filter_git_generic(input, 0);
+        assert_eq!(result, "line one\n\nline two\n\nline three");
+    }
+
+    #[test]
+    fn git_generic_empty_success() {
+        let result = filter_git_generic("", 0);
+        assert_eq!(result, "OK.");
+    }
+
+    #[test]
+    fn git_generic_empty_failure() {
+        let result = filter_git_generic("", 1);
+        assert_eq!(result, "Command failed (exit code 1).");
+    }
+
+    #[test]
+    fn git_generic_drops_use_git_hints() {
+        let input = "CONFLICT (content): Merge conflict in src/lib.rs\n\
+Automatic merge failed; fix conflicts and then commit the result.\n\
+  use \"git add\" to mark resolution";
+        let result = filter_git_generic(input, 1);
+        assert!(result.contains("CONFLICT"));
+        assert!(result.contains("Automatic merge failed"));
+        assert!(!result.contains("use \"git add\""));
+    }
+
+    #[test]
+    fn git_generic_registered_in_registry() {
+        let reg = super::super::registry();
+        assert!(
+            reg.contains_key("git"),
+            "git catch-all should be registered"
+        );
     }
 }

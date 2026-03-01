@@ -75,6 +75,9 @@ mod tests {
         assert!(reg.contains_key("ls"));
         assert!(reg.contains_key("curl"));
         assert!(reg.contains_key("supabase status"));
+        assert!(reg.contains_key("npm run lint"));
+        assert!(reg.contains_key("npm run e2e"));
+        assert!(reg.contains_key("git"));
     }
 
     #[test]

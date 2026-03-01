@@ -12,7 +12,7 @@ pub fn register(m: &mut HashMap<&'static str, BuiltinFilterFn>) {
     m.insert("prettier", filter_prettier as BuiltinFilterFn);
     m.insert("next build", filter_next_build as BuiltinFilterFn);
     m.insert("vite build", filter_vite_build as BuiltinFilterFn);
-    m.insert("vite", filter_vite_build as BuiltinFilterFn);
+    m.insert("vite", filter_vite_dev as BuiltinFilterFn);
 }
 
 /// Filter tsc output: on success "No type errors." On failure, keep error lines and count them.
@@ -215,6 +215,48 @@ pub fn filter_next_build(output: &str, exit_code: i32) -> String {
         while lines.last().is_some_and(|l| l.is_empty()) {
             lines.pop();
         }
+        lines.join("\n")
+    }
+}
+
+/// Filter vite dev server output: extract ready URL + port, drop HMR noise.
+pub fn filter_vite_dev(output: &str, exit_code: i32) -> String {
+    if exit_code != 0 {
+        return filter_vite_build_failure(output, exit_code);
+    }
+
+    let url_re = Regex::new(r"https?://\S+").unwrap();
+    let ready_re = Regex::new(r"(?i)(ready in|started|listening on)").unwrap();
+    let hmr_re = Regex::new(r"(?i)(hmr|hot module|page reload|vite.*update)").unwrap();
+    let network_re = Regex::new(r"(?i)(local:|network:)").unwrap();
+
+    let mut lines = Vec::new();
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Drop HMR noise
+        if hmr_re.is_match(trimmed) {
+            continue;
+        }
+        // Keep ready/listening lines, URL lines, network info
+        if ready_re.is_match(trimmed) || url_re.is_match(trimmed) || network_re.is_match(trimmed) {
+            lines.push(trimmed.to_string());
+            continue;
+        }
+        // Keep error/warning lines
+        if trimmed.starts_with("error")
+            || trimmed.starts_with("Error")
+            || trimmed.starts_with("[vite]")
+        {
+            lines.push(trimmed.to_string());
+        }
+    }
+
+    if lines.is_empty() {
+        "Dev server started.".to_string()
+    } else {
         lines.join("\n")
     }
 }
@@ -641,5 +683,60 @@ Some other output";
     fn vite_build_success_no_output() {
         let result = filter_vite_build("", 0);
         assert_eq!(result, "Build completed successfully.");
+    }
+
+    // -- vite dev --
+
+    #[test]
+    fn vite_dev_extracts_url_and_ready() {
+        let input = "\
+  VITE v6.0.7  ready in 342 ms
+
+  ➜  Local:   http://localhost:5174/
+  ➜  Network: use --host to expose
+  ➜  press h + enter to show help";
+        let result = filter_vite_dev(input, 0);
+        assert!(result.contains("http://localhost:5174/"));
+        assert!(result.contains("ready in"));
+        assert!(!result.contains("press h + enter"));
+    }
+
+    #[test]
+    fn vite_dev_drops_hmr_noise() {
+        let input = "\
+  ➜  Local:   http://localhost:5173/
+[vite] hmr update /src/App.vue
+[vite] page reload src/main.ts
+[vite] hmr update /src/components/Foo.vue";
+        let result = filter_vite_dev(input, 0);
+        assert!(result.contains("http://localhost:5173/"));
+        assert!(!result.contains("hmr update"));
+        assert!(!result.contains("page reload"));
+    }
+
+    #[test]
+    fn vite_dev_empty_output() {
+        let result = filter_vite_dev("", 0);
+        assert_eq!(result, "Dev server started.");
+    }
+
+    #[test]
+    fn vite_dev_failure() {
+        let input = "\
+error when starting dev server:
+Error: Cannot find module 'vite'";
+        let result = filter_vite_dev(input, 1);
+        assert!(result.contains("error"));
+        assert!(result.contains("Error:"));
+    }
+
+    #[test]
+    fn vite_dev_keeps_vite_errors() {
+        let input = "\
+  ➜  Local:   http://localhost:5173/
+[vite] Internal server error: Failed to resolve import";
+        let result = filter_vite_dev(input, 0);
+        assert!(result.contains("http://localhost:5173/"));
+        assert!(result.contains("[vite] Internal server error"));
     }
 }
